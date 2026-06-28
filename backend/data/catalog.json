@@ -131,7 +131,8 @@
       "title": "MD",
       "specialty": "Dermatology",
       "location_ids": [
-        "loc_004"
+        "loc_004",
+        "loc_007"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -187,9 +188,9 @@
       "title": "NP",
       "specialty": "Family Medicine",
       "location_ids": [
-        "loc_007",
         "loc_002",
-        "loc_005"
+        "loc_005",
+        "loc_007"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -273,8 +274,8 @@
       "title": "MD",
       "specialty": "Psychiatry",
       "location_ids": [
-        "loc_004",
-        "loc_001"
+        "loc_001",
+        "loc_004"
       ],
       "accepting_new_patients": false,
       "languages": [
@@ -294,8 +295,8 @@
       "title": "DO",
       "specialty": "Neurology",
       "location_ids": [
-        "loc_003",
-        "loc_001"
+        "loc_001",
+        "loc_003"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -451,8 +452,8 @@
       "title": "DO",
       "specialty": "Pediatrics",
       "location_ids": [
-        "loc_005",
-        "loc_004"
+        "loc_004",
+        "loc_005"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -485,8 +486,8 @@
       "title": "DO",
       "specialty": "Radiology",
       "location_ids": [
-        "loc_004",
-        "loc_000"
+        "loc_000",
+        "loc_004"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -510,7 +511,8 @@
       "title": "MD",
       "specialty": "Radiology",
       "location_ids": [
-        "loc_000"
+        "loc_000",
+        "loc_005"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -534,9 +536,9 @@
       "title": "PA",
       "specialty": "Family Medicine",
       "location_ids": [
+        "loc_000",
         "loc_004",
-        "loc_005",
-        "loc_000"
+        "loc_005"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -586,6 +588,7 @@
       "title": "DO",
       "specialty": "Dental",
       "location_ids": [
+        "loc_001",
         "loc_007"
       ],
       "accepting_new_patients": true,
@@ -623,6 +626,7 @@
       "title": "MD",
       "specialty": "Dental",
       "location_ids": [
+        "loc_001",
         "loc_003"
       ],
       "accepting_new_patients": true,
@@ -790,9 +794,10 @@
       "title": "MD",
       "specialty": "Dermatology",
       "location_ids": [
-        "loc_005",
         "loc_002",
-        "loc_004"
+        "loc_004",
+        "loc_005",
+        "loc_006"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -814,9 +819,9 @@
       "title": "MD",
       "specialty": "Pulmonology",
       "location_ids": [
+        "loc_004",
         "loc_006",
-        "loc_007",
-        "loc_004"
+        "loc_007"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -946,8 +951,8 @@
       "title": "PA",
       "specialty": "Endocrinology",
       "location_ids": [
-        "loc_007",
-        "loc_004"
+        "loc_004",
+        "loc_007"
       ],
       "accepting_new_patients": false,
       "languages": [
@@ -1051,8 +1056,9 @@
       "title": "DO",
       "specialty": "Lab",
       "location_ids": [
-        "loc_003",
-        "loc_002"
+        "loc_000",
+        "loc_002",
+        "loc_003"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -1119,8 +1125,8 @@
       "title": "MD",
       "specialty": "Internal Medicine",
       "location_ids": [
-        "loc_004",
-        "loc_003"
+        "loc_003",
+        "loc_004"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -1211,8 +1217,8 @@
       "title": "DO",
       "specialty": "Family Medicine",
       "location_ids": [
-        "loc_006",
-        "loc_002"
+        "loc_002",
+        "loc_006"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -1271,8 +1277,8 @@
       "title": "MD",
       "specialty": "Cardiology",
       "location_ids": [
-        "loc_007",
-        "loc_004"
+        "loc_004",
+        "loc_007"
       ],
       "accepting_new_patients": true,
       "languages": [
@@ -1324,6 +1330,7 @@
       "title": "DO",
       "specialty": "Dermatology",
       "location_ids": [
+        "loc_000",
         "loc_001",
         "loc_005"
       ],
