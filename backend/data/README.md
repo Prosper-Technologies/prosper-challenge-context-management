@@ -5,7 +5,7 @@ work: a scheduling agent has to navigate it reliably and cost-effectively. It is
 deliberately **large** (so dumping it all into the prompt is expensive/inaccurate) and
 deliberately **messy** (so naive matching fails).
 
-Counts: ~30 locations · ~50 providers · ~82 appointment types.
+Counts: ~8 locations · ~50 providers · ~82 appointment types.
 
 ## Schema
 
