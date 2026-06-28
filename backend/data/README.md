@@ -11,7 +11,6 @@ Counts: ~30 locations · ~50 providers · ~82 appointment types.
 
 ```jsonc
 {
-  "_comment": { ...short field reference, inline in the file... },
   "policies": [ "...human-readable rules a correct agent must honor..." ],
 
   "locations": [{

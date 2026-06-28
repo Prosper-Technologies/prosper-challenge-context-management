@@ -1,11 +1,4 @@
 {
-  "_comment": {
-    "about": "Synthetic clinic catalog for the context-management challenge. Intentionally large and messy (duplicate provider names, near-duplicate appointment types, capability-gated services, multi-location providers).",
-    "location": "id, name, address, city, phone, hours, capabilities[] (imaging|lab|physical_therapy|dental|surgery)",
-    "provider": "id, name, title (MD|DO|NP|PA), specialty, location_ids[] (where they practice), accepting_new_patients (bool), languages[], appointment_type_ids[] (what they can be booked for)",
-    "appointment_type": "id, name, specialty, duration_min, requires_referral (bool), new_patients_allowed (bool), required_capability (optional; must match a location capability)",
-    "policies": "human-readable rules a correct agent must honor when booking"
-  },
   "policies": [
     "A provider can only be booked at a location listed in their location_ids.",
     "A provider can only be booked for an appointment type listed in their appointment_type_ids.",
