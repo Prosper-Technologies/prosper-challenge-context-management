@@ -1,5 +1,5 @@
 #
-# Voice pipeline — Prosper Product Engineer Challenge
+# Voice pipeline — Prosper AI Software Engineer Challenge
 #
 # The runnable voice agent: WebRTC transport + ElevenLabs STT/TTS + OpenAI LLM,
 # driven by a Pipecat Flows node graph. This file is generic — it loads an agent
