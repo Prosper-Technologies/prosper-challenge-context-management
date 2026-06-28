@@ -31,6 +31,6 @@ Remember to update the `.env` file accordingly.
 | `backend/bot.py` | The voice pipeline (WebRTC + ElevenLabs STT/TTS + OpenAI LLM). Loads an agent JSON via `AgentBuilder` and runs it. No graph logic lives here. |
 | `backend/agent_builder/` | All agent-building code. `schema.py` = the declarative `AgentConfig` / `Node` / `Edge` contract; `builder.py` = `AgentBuilder`, which loads + validates the JSON and compiles it into a Pipecat Flows graph. |
 | `backend/example_flow.json` | The example agent **as data** — a clinic scheduler. The starting point for the Phase 2 context-management work. |
-| `data/catalog.json` | A deliberately large, deliberately messy clinic catalog (locations, providers, appointment types, rules) for the Phase 2 work. See [`data/README.md`](data/README.md). |
+| `data/catalog.json` | A deliberately large, deliberately messy clinic catalog (locations, providers, appointment types, booking rules) for the Phase 2 work. Field structure is documented in the file's `_comment`. |
 
 To run a different agent, point `AGENT_FLOW` in `bot.py` at another JSON file.
