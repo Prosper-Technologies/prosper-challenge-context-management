@@ -1,10 +1,10 @@
 #
-# Agent schema — the declarative contract the Phase 2 Composer reads and writes.
+# Agent schema — the declarative contract the Phase 2 Copilot reads and writes.
 #
 # Design rule: stay as close to Pipecat Flows' own vocabulary as possible. A node
 # carries Pipecat's native fields (`role_message`, `task_messages`, `pre/post_actions`)
 # verbatim. The ONLY thing we add is `edges`: transitions expressed as DATA (a string
-# `target`) rather than as Python closures — because a Composer can emit a string, not
+# `target`) rather than as Python closures — because a Copilot can emit a string, not
 # a callable. `AgentBuilder` turns these strings back into the closures Pipecat wants.
 #
 
