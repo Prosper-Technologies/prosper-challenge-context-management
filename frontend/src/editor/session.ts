@@ -1,6 +1,6 @@
 // Agent-level flows that talk to the backend: list, open, create, duplicate,
-// delete, save, and applying the raw JSON view. Agent switching is refused while
-// a test call holds the lock.
+// delete, save, import/export, and applying the raw JSON view. Agent switching
+// (which includes importing) is refused while a test call holds the lock.
 
 import * as api from "../api";
 import type { AgentConfig, Issue, IssuesResponse } from "../generated/contract";
@@ -25,11 +25,14 @@ function canSwitch(): boolean {
   return confirmDiscard();
 }
 
-export async function refreshAgents() {
+/** Reload the saved-agent list; returns why it failed, if it did. */
+export async function refreshAgents(): Promise<string | null> {
   try {
     state().setAgents(await api.listAgents());
+    return null;
   } catch (e) {
     fail(e);
+    return e instanceof Error ? e.message : String(e);
   }
 }
 
@@ -128,6 +131,52 @@ export async function saveAgent() {
   } catch (e) {
     fail(e);
   }
+}
+
+/** Open a JSON file as a new, unsaved agent, named after the file.
+ *
+ * The document is taken as is, so fields the builder doesn't know about survive;
+ * only nodes without a canvas position get one. A file that isn't a well-formed
+ * agent (or isn't JSON at all) opens in the JSON repair view with its text. */
+export async function importAgent(
+  fileName: string,
+  text: string,
+  validate: (doc: unknown) => Promise<IssuesResponse> = api.validateAgent,
+) {
+  if (!canSwitch()) return;
+  let data: unknown;
+  let malformed = false;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    malformed = true;
+  }
+  if (!malformed) {
+    try {
+      malformed = (await validate(data)).malformed;
+    } catch (e) {
+      return fail(e);
+    }
+  }
+  const id = agentIdFor(fileName.replace(/\.json$/i, ""));
+  state().open(id, malformed ? { raw: text } : { doc: data as AgentConfig }, false);
+  state().notify(
+    malformed
+      ? { kind: "error", text: `${fileName} isn't a well-formed agent. Repair it below, then apply.` }
+      : { kind: "info", text: `Imported ${fileName} as '${id}'. It isn't saved yet.` },
+  );
+}
+
+/** The open agent as a JSON file (`<id>.json`), pending field edits included. */
+export async function exportAgent(): Promise<{ fileName: string; text: string } | null> {
+  const pending = await commitPending("export");
+  if (pending) {
+    state().notify({ kind: "error", text: pending });
+    return null;
+  }
+  const { agentId, doc, raw } = state();
+  if (!agentId || (!doc && raw === null)) return null;
+  return { fileName: `${agentId}.json`, text: doc ? `${JSON.stringify(doc, null, 2)}\n` : raw! };
 }
 
 /** Replace the document with raw JSON, if it's a well-formed agent. */

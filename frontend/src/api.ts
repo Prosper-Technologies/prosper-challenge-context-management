@@ -11,13 +11,17 @@ export class ApiError extends Error {
   }
 }
 
+const UNREACHABLE = "The backend is unreachable (is `make dev` running?)";
+
 async function request<T>(path: string, init?: RequestInit, accept: number[] = []): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, init);
   } catch (e) {
-    throw new ApiError(`The backend is unreachable (is \`make run\` going?): ${e}`, 0);
+    throw new ApiError(`${UNREACHABLE}: ${e}`, 0);
   }
+  // The Vite dev proxy answers 502 when nothing is listening on :7860.
+  if (res.status === 502) throw new ApiError(UNREACHABLE, 502);
   if (!res.ok && !accept.includes(res.status)) {
     let detail = res.statusText;
     try {

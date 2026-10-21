@@ -1,7 +1,8 @@
 // The graph canvas: a controlled React Flow view of the document. Canvas events
 // become document actions (connect, delete, a finished drag) or transient state
 // (selection, in-progress drag positions, measured sizes). A drag commits once,
-// on drop, so it is a single undo step and never triggers validation.
+// on drop, so it is a single undo step and never triggers validation. "Tidy
+// layout" re-lays out every node as one step.
 
 import {
   Background,
@@ -9,15 +10,19 @@ import {
   Controls,
   Handle,
   MarkerType,
+  MiniMap,
   type NodeChange,
   type NodeProps,
+  Panel,
   Position,
   ReactFlow,
+  useReactFlow,
 } from "@xyflow/react";
 import { memo, useCallback, useMemo, useState } from "react";
 import * as d from "../editor/document";
+import type { Node as NodeConfig } from "../generated/contract";
 import { type AgentFlowEdge, type AgentFlowNode, edgeId, toFlow } from "../editor/flow";
-import { NODE_WIDTH } from "../editor/layout";
+import { NODE_WIDTH, tidyLayout } from "../editor/layout";
 import { editorStore, useEditor } from "../editor/store";
 import { issuesOf, worstLevel } from "../editor/validation";
 
@@ -30,8 +35,10 @@ export default function Canvas() {
   const selection = useEditor((s) => s.selection);
   const locked = useEditor((s) => s.locked);
   const tracedEdges = useEditor((s) => s.trace.edges);
-  const live = useEditor((s) => s.trace.active !== null);
+  const activeNode = useEditor((s) => s.trace.active);
+  const live = activeNode !== null;
   const { edit, select, notify } = editorStore.getState();
+  const { fitView } = useReactFlow();
 
   const base = useMemo(() => toFlow(doc), [doc]);
   const [measured, setMeasured] = useState<Record<string, Size>>({});
@@ -119,6 +126,12 @@ export default function Canvas() {
     [edit],
   );
 
+  const tidy = () => {
+    edit(tidyLayout);
+    // After React Flow has the new positions.
+    requestAnimationFrame(() => void fitView({ padding: 0.2, maxZoom: 1, duration: 300 }));
+  };
+
   return (
     <ReactFlow<AgentFlowNode, AgentFlowEdge>
       nodes={nodes}
@@ -142,8 +155,40 @@ export default function Canvas() {
     >
       <Background />
       <Controls showInteractive={false} />
+      <MiniMap<AgentFlowNode>
+        pannable
+        zoomable
+        nodeColor={(n) => minimapColor(doc.nodes[n.data.index], doc.initial_node, activeNode)}
+        className="rounded border border-slate-200"
+      />
+      <Panel position="top-right">
+        <button
+          type="button"
+          disabled={locked || doc.nodes.length < 2}
+          title="Re-arrange every node top to bottom (one undo step)"
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-sm shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={tidy}
+        >
+          Tidy layout
+        </button>
+      </Panel>
+      {doc.nodes.length === 0 && (
+        <Panel position="top-center">
+          <p className="mt-16 rounded bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+            This agent has no nodes yet. Use “+ Add node” on the left to create the first one.
+          </p>
+        </Panel>
+      )}
     </ReactFlow>
   );
+}
+
+/** Minimap colours follow the canvas: the active node, then start and end nodes. */
+function minimapColor(node: NodeConfig | undefined, initial: string, active: string | null): string {
+  if (!node) return "#cbd5e1";
+  if (node.name === active) return "#059669";
+  if (node.name === initial) return "#6ee7b7";
+  return node.end ? "#334155" : "#cbd5e1";
 }
 
 function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {

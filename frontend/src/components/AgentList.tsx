@@ -58,6 +58,9 @@ export default function AgentList() {
           }}
         />
       )}
+      {items.length === 0 && !creating && (
+        <p className="px-2 text-xs text-slate-400">No saved agents.</p>
+      )}
       <ul className="flex flex-col gap-0.5 overflow-y-auto">
         {items.map((item) => (
           <li key={item.id} className="group flex items-center">

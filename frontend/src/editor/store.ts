@@ -233,7 +233,7 @@ const problemsCache = new WeakMap<AgentConfig, string[]>();
 
 /** Why the document can't be shown on the canvas (empty if it can). */
 export function repairProblems(doc: AgentConfig | null): string[] {
-  if (!doc) return ["The saved document isn't a well-formed agent."];
+  if (!doc) return ["This document isn't a well-formed agent."];
   let problems = problemsCache.get(doc);
   if (!problems) problemsCache.set(doc, (problems = identifierProblems(doc)));
   return problems;

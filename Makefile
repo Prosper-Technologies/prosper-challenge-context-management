@@ -6,23 +6,29 @@ PYTHON := $(VENV)/bin/python
 GENERATED := frontend/src/generated
 JSON2TS := npm --prefix frontend exec -- json2ts --unreachableDefinitions --unknownAny --no-additionalProperties
 
-.PHONY: help install lock run web test types check-types clean
+.PHONY: help install lock dev run web test types check-types clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-install: ## Create the venv and install backend + frontend dependencies
+install: ## Create the venv, install backend + frontend dependencies, create backend/.env
 	python3 -m venv $(VENV)
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r backend/requirements-dev.lock
 	npm --prefix frontend ci
+	@test -f backend/.env || (cp backend/.env.example backend/.env && \
+		echo "Created backend/.env: add your OpenAI and ElevenLabs API keys to it.")
 
 lock: ## Re-resolve the Python lock from requirements*.txt (needs uv; review the diff)
 	cd backend && uv pip compile --universal --python-version 3.11 \
 		requirements-dev.txt -o requirements-dev.lock
 
+dev: ## Run the backend and the builder together; open http://localhost:5173 (Ctrl+C stops both)
+	@$(MAKE) --no-print-directory -j2 run web
+
 run: ## Run the voice agent + builder API (prebuilt client at http://localhost:7860/client)
+	@test -f backend/.env || echo "warning: no backend/.env, so test calls will fail (see backend/.env.example)"
 	$(PYTHON) backend/bot.py
 
 web: ## Run the builder frontend (http://localhost:5173; needs `make run`)

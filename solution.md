@@ -1,6 +1,6 @@
 # Solution Overview
 
-Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, and M3 built the graph editor.
+Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
 ## Milestone 1: browser integration
 
@@ -201,3 +201,53 @@ vitest covers the document actions and what they preserve, undo grouping, transi
 ### Out of scope for M3
 
 Keyboard shortcuts (Save, Undo/Redo), import/export, tidy layout, the minimap, `make dev` and the README walkthrough are M4.
+
+## Milestone 4: delivery
+
+### Import and export are files, not API calls
+
+Export downloads the open document as `<id>.json`. Import reads a file in the browser and opens it as a new, unsaved agent named after the file (deduplicated against saved ids), so nothing reaches `backend/agents/` until you save.
+
+- **Why:** an import never overwrites a saved agent by accident, and it goes through the same open path as everything else (dirty tracking, history reset, the repair view).
+- Content is taken as is. The only change is that nodes without a `ui` position get one, as on any open. A test pins that export → import gives back the same document, unknown fields included.
+- A file that isn't a well-formed agent, or isn't valid JSON, opens in the JSON repair view with its original text instead of being refused. A trailing comma is easier to fix there than in another editor.
+- Export of a malformed (raw) document exports its text unchanged. Like Save, Export commits pending field buffers first and stops if one is rejected.
+- **Tradeoff:** import is "new agent from file". There's no "replace this agent with a file". The JSON view's paste and apply covers that.
+
+### Shortcuts leave text undo alone
+
+Mod+S saves (it commits the field being typed in first), and Mod+Z / Shift+Mod+Z (or Ctrl+Y) undo and redo the document. Mod is Cmd on macOS and Ctrl elsewhere. Inside a text field, undo and redo are left to the browser.
+
+- **Why:** while you're typing, the field's text is an uncommitted buffer. Cmd+Z there should undo your typing, not the document change behind it. Save is the exception: it's safe everywhere, and the browser's own "Save page" is never wanted here.
+- The key mapping is a pure function (`editor/shortcuts.ts`) with tests. The listener is one `keydown` handler in `App`. Undo and redo still go through the store, so the call lock applies to them too.
+
+### Tidy layout and the minimap
+
+"Tidy layout" sets every node to its dagre position in one `moveNodes` action, so it's one undo step. It keeps other `ui` fields, does nothing on an already tidy graph (no empty history entry), and fits the view afterwards. React Flow's `MiniMap` colours the start node, end nodes and the active node during a call.
+
+- **Tradeoff:** tidy throws away hand-placed positions. It's an explicit button and undoable, and layout still never runs on its own except for unplaced nodes.
+
+### Empty and error states
+
+- **Backend down:** the first load shows "Can't reach the backend" and retries every 3 seconds. `make dev` starts Vite well before Python has finished importing Pipecat, so a browser opened straight away recovers by itself. The Vite proxy answers 502 when nothing is listening on :7860, and that's reported as "unreachable" rather than as a bare status code.
+- **No agent open, or none saved:** an empty state with "New agent" and "Import". An agent with no nodes gets a hint on the canvas.
+- **Notices:** info notices clear after 6 seconds. Errors stay until dismissed or replaced, so a failed save isn't missed.
+- **Missing API keys:** the `/start` preflight now also checks `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` and returns a 422 that names the missing keys and the file to fix. Before, the call connected and then dropped with no explanation (`bot()` failed on `os.environ[...]` after WebRTC setup). Editing, saving and validation don't need the keys.
+
+### `make dev` and a fresh clone
+
+`make dev` runs `make -j2 run web`, so one Ctrl+C stops both servers (make passes the interrupt to both jobs). `make install` also creates `backend/.env` from `.env.example` if it doesn't exist and says so. It never overwrites an existing one.
+
+- **Tradeoff:** the two servers' logs are interleaved in one terminal. `make run` and `make web` still exist for separate terminals.
+- Checked from a copy of the tracked files in an empty directory: `make install`, then `make dev` brought up both servers, the proxy reached the backend, and SIGINT to the process group stopped both. With the empty keys that `make install` writes, a test call showed the missing-keys message.
+
+### Testing
+
+vitest adds the shortcut mapping (both platforms, inside and outside fields), tidy as one step that keeps extra `ui` fields, and import/export: the round trip, id deduplication, positions added only where missing, malformed files and invalid JSON going to the repair view, refusal during a call, and pending buffers committed or blocking. pytest adds the missing-key preflight.
+
+Also checked in headless Chromium against the real backend: import, then tidy, then Cmd+Z and Shift+Cmd+Z as single steps. Cmd+Z inside a field left the document alone, and Cmd+S from inside a field saved the typed value. The exported file kept unknown fields. A malformed import opened the repair view, and deleting the open agent showed the empty state. The backend-down page recovered on its own when the backend started.
+
+### Not done
+
+- I didn't place a real voice call in M4, because none of the call code changed. The M3 browser checks covered the call itself.
+- Stretch goals (node templates, a custom edge for parallel edges and self-loops, call history, a catalog demo agent) are not done.

@@ -1,10 +1,11 @@
 // Canvas positions. Layout runs when a document is loaded or replaced and some
 // nodes have no `ui` position; it never moves a node that already has one, and
-// editing prompts never reruns it.
+// editing prompts never reruns it. "Tidy layout" (`tidyLayout`) is the only thing
+// that moves every node.
 
 import dagre from "@dagrejs/dagre";
 import type { AgentConfig } from "../generated/contract";
-import type { XY } from "./document";
+import { type XY, moveNodes } from "./document";
 
 // Matches the node card's size on the canvas (AgentNode).
 export const NODE_WIDTH = 240;
@@ -62,4 +63,9 @@ export function layoutMissing(doc: AgentConfig): AgentConfig {
         : node,
     ),
   };
+}
+
+/** Every node at its dagre position: one document action, so one undo step. */
+export function tidyLayout(doc: AgentConfig): AgentConfig {
+  return moveNodes(doc, new Map(layoutPositions(doc).map((position, i) => [i, position])));
 }

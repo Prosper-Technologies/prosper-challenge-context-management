@@ -9,7 +9,8 @@
 #   DELETE /api/agents/{id}
 #   POST   /api/agents/validate   -> {issues, malformed} for a document, without saving it
 #   POST   /start                 (runner route) preflighted here: an invalid agent
-#                                 selection is rejected with 422 before any WebRTC setup
+#                                 selection, or a missing API key, is rejected with 422
+#                                 before any WebRTC setup
 #
 # Agents are stored one JSON file per agent in backend/agents/. A structurally
 # valid document is saved even if its graph has errors (so drafts can be saved and
@@ -34,6 +35,8 @@ from agent_builder import AgentBuilder, AgentConfig, AgentValidationError, Issue
 AGENTS_DIR = Path(__file__).parent / "agents"
 DEFAULT_AGENT_ID = "example"  # runs when a call selects no agent
 AGENT_ID = re.compile(r"^[a-z0-9_-]{1,64}$")
+# Read from backend/.env (see .env.example) by bot.py, when a call starts.
+REQUIRED_ENV = ("OPENAI_API_KEY", "ELEVENLABS_API_KEY")
 
 
 class AgentSummary(BaseModel):
@@ -236,6 +239,11 @@ def build_router(agents: AgentStore) -> APIRouter:
     return router
 
 
+def missing_env() -> list[str]:
+    """The API keys a call needs that aren't set."""
+    return [name for name in REQUIRED_ENV if not os.environ.get(name, "").strip()]
+
+
 def install(app: FastAPI, agents: Optional[AgentStore] = None) -> None:
     """Register the builder routes and the /start preflight on the runner's app."""
     agents = agents or store
@@ -256,6 +264,16 @@ def install(app: FastAPI, agents: Optional[AgentStore] = None) -> None:
                     {
                         "detail": str(e),
                         "issues": [i.model_dump(mode="json") for i in e.issues],
+                    },
+                    status_code=422,
+                )
+            # Without this, the call would connect and then drop with no explanation.
+            if missing := missing_env():
+                return JSONResponse(
+                    {
+                        "detail": f"{', '.join(missing)} not set. Add the keys to backend/.env "
+                        "(see backend/.env.example) and restart the backend.",
+                        "issues": [],
                     },
                     status_code=422,
                 )

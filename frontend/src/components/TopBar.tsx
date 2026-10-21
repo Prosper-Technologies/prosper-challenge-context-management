@@ -1,9 +1,11 @@
 // Top bar: agent identity, save (with an unsaved-changes dot), undo/redo, the
-// validation badge, the canvas/JSON toggle and the test call button.
+// validation badge, import/export, the canvas/JSON toggle and the test call
+// button. The keyboard shortcuts are in App (useShortcuts).
 
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { hasPendingBuffers, subscribeBuffers } from "../editor/buffers";
-import { saveAgent } from "../editor/session";
+import { exportAgent, importAgent, saveAgent } from "../editor/session";
+import { shortcutLabel } from "../editor/shortcuts";
 import { editorStore, isDirty, repairProblems, useEditor, useHistory } from "../editor/store";
 import { issuesOf } from "../editor/validation";
 import { Button, IssueList } from "./fields";
@@ -39,19 +41,48 @@ export default function TopBar({ onTestCall }: { onTestCall: () => void }) {
 
       {agentId && (
         <>
-          <Button tone="primary" disabled={!dirty} onClick={() => void saveAgent()}>
+          <Button
+            tone="primary"
+            disabled={!dirty}
+            onClick={() => void saveAgent()}
+            title={`Save (${shortcutLabel("save")})`}
+          >
             Save
           </Button>
           <div className="flex">
-            <Button tone="ghost" disabled={!canUndo || locked} onClick={undo} title="Undo">
+            <Button
+              tone="ghost"
+              disabled={!canUndo || locked}
+              onClick={undo}
+              title={`Undo (${shortcutLabel("undo")})`}
+            >
               ↶ Undo
             </Button>
-            <Button tone="ghost" disabled={!canRedo || locked} onClick={redo} title="Redo">
+            <Button
+              tone="ghost"
+              disabled={!canRedo || locked}
+              onClick={redo}
+              title={`Redo (${shortcutLabel("redo")})`}
+            >
               ↷ Redo
             </Button>
           </div>
           <ValidationBadge />
-          <div className="ml-auto flex overflow-hidden rounded border border-slate-300 text-sm">
+        </>
+      )}
+
+      <div className="ml-auto flex">
+        <ImportButton />
+        {agentId && (
+          <Button tone="ghost" onClick={() => void download()} title="Download the agent as JSON">
+            Export
+          </Button>
+        )}
+      </div>
+
+      {agentId && (
+        <>
+          <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
             {(["canvas", "json"] as const).map((v) => (
               <button
                 key={v}
@@ -77,6 +108,46 @@ export default function TopBar({ onTestCall }: { onTestCall: () => void }) {
         </>
       )}
     </header>
+  );
+}
+
+async function download() {
+  const file = await exportAgent();
+  if (!file) return;
+  const url = URL.createObjectURL(new Blob([file.text], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url));
+}
+
+/** Pick a JSON file and open it as a new, unsaved agent. */
+export function ImportButton({ tone = "ghost" }: { tone?: "ghost" | "default" }) {
+  const input = useRef<HTMLInputElement>(null);
+  const locked = useEditor((s) => s.locked);
+  return (
+    <>
+      <Button
+        tone={tone}
+        disabled={locked}
+        onClick={() => input.current?.click()}
+        title="Open a JSON file as a new agent"
+      >
+        Import
+      </Button>
+      <input
+        ref={input}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = ""; // so picking the same file again still fires
+          if (file) await importAgent(file.name, await file.text());
+        }}
+      />
+    </>
   );
 }
 

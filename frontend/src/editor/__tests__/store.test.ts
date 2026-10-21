@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as d from "../document";
 import { toFlow } from "../flow";
-import { layoutMissing } from "../layout";
+import { layoutMissing, tidyLayout } from "../layout";
 import { createEditorStore, isDirty } from "../store";
 import { agent } from "./fixtures";
 
@@ -30,6 +30,21 @@ describe("undo history", () => {
     expect(state().doc).toEqual(agent());
     state().redo();
     expect(state().doc!.nodes[1].name).toBe("details");
+  });
+
+  it("records tidy layout as one step, keeping other position fields", () => {
+    state().edit((doc) => d.moveNodes(doc, new Map([[2, { x: 900, y: -40 }]])));
+    history().clear();
+    state().edit(tidyLayout);
+
+    const nodes = state().doc!.nodes;
+    expect(history().pastStates).toHaveLength(1);
+    expect(nodes[0].ui!.y).toBeLessThan(nodes[1].ui!.y);
+    expect(nodes[1].ui!.y).toBeLessThan(nodes[2].ui!.y);
+    expect(nodes[1].ui!.x_pinned).toBe(true);
+    // Already tidy: nothing changes, so no new step.
+    state().edit(tidyLayout);
+    expect(history().pastStates).toHaveLength(1);
   });
 
   it("records a drag, committed on drop, as one step", () => {

@@ -66,7 +66,9 @@ def test_unreadable_saved_agent_is_rejected(store):
 
 
 @pytest.fixture
-def client(store) -> TestClient:
+def client(store, monkeypatch) -> TestClient:
+    for name in api.REQUIRED_ENV:
+        monkeypatch.setenv(name, "test-key")
     app = FastAPI()
     install(app, store)
 
@@ -98,6 +100,17 @@ def test_start_preflight_rejects_unknown_agent_id(client):
 
     assert response.status_code == 422
     assert "unknown" in response.json()["detail"]
+
+
+def test_start_preflight_names_missing_api_keys(client, monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY")
+    monkeypatch.setenv("OPENAI_API_KEY", "  ")
+    response = client.post("/start", json={"body": {"agent": draft()}})
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "OPENAI_API_KEY, ELEVENLABS_API_KEY not set" in detail
+    assert "backend/.env" in detail
 
 
 async def test_bot_disconnects_on_invalid_selection(monkeypatch):
