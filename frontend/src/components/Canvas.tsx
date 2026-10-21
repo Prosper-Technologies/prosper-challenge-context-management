@@ -25,6 +25,7 @@ import { type AgentFlowEdge, type AgentFlowNode, edgeId, toFlow } from "../edito
 import { NODE_WIDTH, tidyLayout } from "../editor/layout";
 import { editorStore, useEditor } from "../editor/store";
 import { issuesOf, worstLevel } from "../editor/validation";
+import { Button } from "./fields";
 
 const nodeTypes = { agent: memo(AgentNode) };
 
@@ -126,6 +127,11 @@ export default function Canvas() {
     [edit],
   );
 
+  const nodeColor = useCallback(
+    (n: AgentFlowNode) => minimapColor(doc.nodes[n.data.index], doc.initial_node, activeNode),
+    [doc, activeNode],
+  );
+
   const tidy = () => {
     edit(tidyLayout);
     // After React Flow has the new positions.
@@ -158,19 +164,17 @@ export default function Canvas() {
       <MiniMap<AgentFlowNode>
         pannable
         zoomable
-        nodeColor={(n) => minimapColor(doc.nodes[n.data.index], doc.initial_node, activeNode)}
+        nodeColor={nodeColor}
         className="rounded border border-slate-200"
       />
       <Panel position="top-right">
-        <button
-          type="button"
+        <Button
           disabled={locked || doc.nodes.length < 2}
           title="Re-arrange every node top to bottom (one undo step)"
-          className="rounded border border-slate-300 bg-white px-2 py-1 text-sm shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={tidy}
         >
           Tidy layout
-        </button>
+        </Button>
       </Panel>
       {doc.nodes.length === 0 && (
         <Panel position="top-center">
@@ -185,10 +189,9 @@ export default function Canvas() {
 
 /** Minimap colours follow the canvas: the active node, then start and end nodes. */
 function minimapColor(node: NodeConfig | undefined, initial: string, active: string | null): string {
-  if (!node) return "#cbd5e1";
-  if (node.name === active) return "#059669";
-  if (node.name === initial) return "#6ee7b7";
-  return node.end ? "#334155" : "#cbd5e1";
+  if (node?.name === active) return "#059669";
+  if (node?.name === initial) return "#6ee7b7";
+  return node?.end ? "#334155" : "#cbd5e1";
 }
 
 function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {

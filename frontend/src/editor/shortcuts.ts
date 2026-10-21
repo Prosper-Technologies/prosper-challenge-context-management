@@ -15,7 +15,7 @@ interface Keys {
   altKey: boolean;
 }
 
-export const isMac =
+const isMac =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** How a shortcut is written on this platform, for tooltips. */

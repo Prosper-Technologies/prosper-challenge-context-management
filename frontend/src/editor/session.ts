@@ -9,8 +9,12 @@ import { editorStore, isDirty, repairProblems } from "./store";
 
 const state = () => editorStore.getState();
 
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 function fail(e: unknown) {
-  state().notify({ kind: "error", text: e instanceof Error ? e.message : String(e) });
+  state().notify({ kind: "error", text: messageOf(e) });
 }
 
 function confirmDiscard(): boolean {
@@ -25,14 +29,11 @@ function canSwitch(): boolean {
   return confirmDiscard();
 }
 
-/** Reload the saved-agent list; returns why it failed, if it did. */
-export async function refreshAgents(): Promise<string | null> {
+export async function refreshAgents() {
   try {
     state().setAgents(await api.listAgents());
-    return null;
   } catch (e) {
     fail(e);
-    return e instanceof Error ? e.message : String(e);
   }
 }
 
@@ -133,6 +134,26 @@ export async function saveAgent() {
   }
 }
 
+type Parsed = { doc: AgentConfig } | { error: string; issues?: Issue[] };
+
+/** Parse JSON text and check with the backend that it's a well-formed agent.
+ * Throws if the backend can't be reached. */
+async function parseAgent(
+  text: string,
+  validate: (doc: unknown) => Promise<IssuesResponse> = api.validateAgent,
+): Promise<Parsed> {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    return { error: `Invalid JSON: ${messageOf(e)}` };
+  }
+  const result = await validate(data);
+  return result.malformed
+    ? { error: "Not a well-formed agent.", issues: result.issues }
+    : { doc: data as AgentConfig };
+}
+
 /** Open a JSON file as a new, unsaved agent, named after the file.
  *
  * The document is taken as is, so fields the builder doesn't know about survive;
@@ -144,26 +165,18 @@ export async function importAgent(
   validate: (doc: unknown) => Promise<IssuesResponse> = api.validateAgent,
 ) {
   if (!canSwitch()) return;
-  let data: unknown;
-  let malformed = false;
+  let parsed: Parsed;
   try {
-    data = JSON.parse(text);
-  } catch {
-    malformed = true;
-  }
-  if (!malformed) {
-    try {
-      malformed = (await validate(data)).malformed;
-    } catch (e) {
-      return fail(e);
-    }
+    parsed = await parseAgent(text, validate);
+  } catch (e) {
+    return fail(e);
   }
   const id = agentIdFor(fileName.replace(/\.json$/i, ""));
-  state().open(id, malformed ? { raw: text } : { doc: data as AgentConfig }, false);
+  state().open(id, "doc" in parsed ? { doc: parsed.doc } : { raw: text }, false);
   state().notify(
-    malformed
-      ? { kind: "error", text: `${fileName} isn't a well-formed agent. Repair it below, then apply.` }
-      : { kind: "info", text: `Imported ${fileName} as '${id}'. It isn't saved yet.` },
+    "doc" in parsed
+      ? { kind: "info", text: `Imported ${fileName} as '${id}'. It isn't saved yet.` }
+      : { kind: "error", text: `${fileName} isn't a well-formed agent. Repair it below, then apply.` },
   );
 }
 
@@ -181,20 +194,14 @@ export async function exportAgent(): Promise<{ fileName: string; text: string } 
 
 /** Replace the document with raw JSON, if it's a well-formed agent. */
 export async function applyJson(text: string): Promise<{ error: string; issues?: Issue[] } | null> {
-  let data: unknown;
+  let parsed: Parsed;
   try {
-    data = JSON.parse(text);
+    parsed = await parseAgent(text);
   } catch (e) {
-    return { error: `Invalid JSON: ${e instanceof Error ? e.message : e}` };
+    return { error: messageOf(e) };
   }
-  let result;
-  try {
-    result = await api.validateAgent(data);
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
-  if (result.malformed) return { error: "Not a well-formed agent.", issues: result.issues };
-  const refused = state().replace(data as AgentConfig);
+  if (!("doc" in parsed)) return parsed;
+  const refused = state().replace(parsed.doc);
   return refused ? { error: refused } : null;
 }
 
@@ -231,7 +238,7 @@ export async function startTestCall(
     }
   } catch (e) {
     state().setLocked(false);
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: messageOf(e) };
   }
   void start(snapshot);
   return null;

@@ -18,7 +18,6 @@ import {
   type CallRefusal,
   newAgent,
   openAgent,
-  refreshAgents,
   saveAgent,
   startTestCall,
 } from "./editor/session";
@@ -52,10 +51,9 @@ function useShortcuts() {
       const shortcut = shortcutFor(e, isTextField(e.target));
       if (!shortcut) return;
       e.preventDefault(); // e.g. the browser's own "Save page"
-      const { agentId, undo, redo } = editorStore.getState();
-      if (shortcut === "save") {
-        if (agentId) void saveAgent();
-      } else if (shortcut === "undo") undo();
+      const { undo, redo } = editorStore.getState();
+      if (shortcut === "save") void saveAgent();
+      else if (shortcut === "undo") undo();
       else redo();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -71,26 +69,28 @@ function useInitialLoad(): { error: string | null; retry: () => void } {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     void (async () => {
-      const failed = await refreshAgents();
+      let agents;
+      try {
+        agents = await api.listAgents();
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+        timer = setTimeout(() => setAttempt((n) => n + 1), 3000);
+        return;
+      }
       if (cancelled) return;
-      setError(failed);
-      if (failed) return;
-      editorStore.getState().notify(null);
-      const { agents, agentId } = editorStore.getState();
+      setError(null);
+      editorStore.getState().setAgents(agents);
       const first = agents.find((a) => a.id === DEFAULT_AGENT) ?? agents[0];
-      if (first && !agentId) await openAgent(first.id, { confirm: false });
+      if (first && !editorStore.getState().agentId) await openAgent(first.id, { confirm: false });
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [attempt]);
-
-  useEffect(() => {
-    if (!error) return;
-    const timer = setTimeout(() => setAttempt((n) => n + 1), 3000);
-    return () => clearTimeout(timer);
-  }, [error, attempt]);
 
   return { error, retry: () => setAttempt((n) => n + 1) };
 }
@@ -131,7 +131,7 @@ export default function App() {
     <ReactFlowProvider>
       <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
         <TopBar onTestCall={() => (call.status === "idle" ? void start() : setPanelOpen(true))} />
-        {notice && !load.error && (
+        {notice && (
           <div
             role={notice.kind === "error" ? "alert" : "status"}
             className={`flex items-start gap-2 px-4 py-1.5 text-sm ${

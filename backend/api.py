@@ -23,6 +23,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 
@@ -260,21 +261,19 @@ def install(app: FastAPI, agents: Optional[AgentStore] = None) -> None:
             try:
                 select_agent(body, agents)
             except AgentSelectionError as e:
-                return JSONResponse(
-                    {
-                        "detail": str(e),
-                        "issues": [i.model_dump(mode="json") for i in e.issues],
-                    },
-                    status_code=422,
-                )
+                return reject(str(e), e.issues)
             # Without this, the call would connect and then drop with no explanation.
             if missing := missing_env():
-                return JSONResponse(
-                    {
-                        "detail": f"{', '.join(missing)} not set. Add the keys to backend/.env "
-                        "(see backend/.env.example) and restart the backend.",
-                        "issues": [],
-                    },
-                    status_code=422,
+                return reject(
+                    f"{', '.join(missing)} not set. Add the keys to backend/.env "
+                    "(see backend/.env.example) and restart the backend."
                 )
         return await call_next(request)
+
+
+def reject(detail: str, issues: Sequence[Issue] = ()) -> JSONResponse:
+    """A /start refusal, shaped like the builder API's errors."""
+    return JSONResponse(
+        {"detail": detail, "issues": [i.model_dump(mode="json") for i in issues]},
+        status_code=422,
+    )
