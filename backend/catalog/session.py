@@ -40,7 +40,7 @@ _RANK = {"patient": 0, "service_id": 1, "provider_id": 2, "location_id": 3}
 
 
 class _State(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, json_schema_serialization_defaults_required=True)
 
 
 class Offer(_State):

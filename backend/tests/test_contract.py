@@ -23,3 +23,13 @@ def test_schema_covers_the_document_and_api_shapes():
         assert name in defs
     assert "ui" in defs["Node"]["properties"]
     assert defs["AgentConfig"]["additionalProperties"] is True  # unknown fields are kept
+
+
+def test_schema_covers_the_catalog_api():
+    defs = contract.json_schema()["$defs"]
+    for name in ["Catalog", "CatalogIssue", "ToolsResponse", "PlaygroundSession", "ToolRunRequest", "ToolRunResponse"]:
+        assert name in defs
+    assert list(defs["ToolArgs"]["properties"]) == list(defs["ToolResults"]["properties"])
+    # Tool results leave out fields at their defaults, so the schema can't require them.
+    assert "fields" not in defs["Violation"]["required"]
+    assert "reservation" in defs["SessionState"]["required"]

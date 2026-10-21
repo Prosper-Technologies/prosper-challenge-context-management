@@ -83,6 +83,23 @@ Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, pat
 - **Validation** knows the registry: unknown tools or guards, a tool that clashes with an edge function, and an agent that books without a guarded success end node are errors. The editor doesn't have tool or guard controls yet (M8); the JSON view edits them, and form edits keep them.
 - Bookings are held in memory in one calendar shared by voice calls, and reset when the backend restarts.
 
+### Catalog API (Phase 2)
+
+The catalog screen (M8) and its tool playground use these routes. The playground runs the same tools as a voice call, in a sandbox session with its own calendar:
+
+| Route | |
+| --- | --- |
+| `GET /api/catalog` | The catalog, as loaded from `backend/data/catalog.json`. |
+| `GET /api/catalog/lint` | `{issues}`: catalog health checks, each `{level, code, path, refs, message}`. |
+| `GET /api/catalog/tools` | `{tools, guards}`: each tool's name, description and argument schema (the one the LLM gets), and each guard's name, description and the tools it `completes`. |
+| `POST /api/catalog/sessions` | A new playground session: `{session_id, state, ttl_s}`. |
+| `DELETE /api/catalog/sessions/{id}` | Dispose of a session. Reset is a delete followed by a new session. |
+| `POST /api/catalog/tools/{name}` | Run a tool: `{session_id, args}` → `{result, state, approx_tokens}`. A tool's own failure (bad arguments, a rejected update) is a 200 whose `result` is `{error}`, as the model would see it. An unknown tool or session is a 404, and an expired session a 410. |
+
+- Sessions expire after 30 minutes without a request (and the least recently used one expires early past 100 sessions). An expired id is refused, never replaced by a fresh session.
+- Playground bookings stay in their sandbox: they never reach a voice call's session or the voice calendar, and reset on restart.
+- `approx_tokens` is an estimate (about 4 characters a token) of the result's size, not a tokenizer count.
+
 ### Development
 
 `make test` runs the backend (pytest) and frontend (vitest) tests. `make types` regenerates the frontend's TypeScript types (`frontend/src/generated/`) from the backend's JSON Schema, and `make check-types` fails if they're stale. Python dependencies install from `backend/requirements-dev.lock`; `make lock` re-resolves it with [uv](https://docs.astral.sh/uv/) after a deliberate change to `requirements*.txt`.
@@ -97,6 +114,7 @@ Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, pat
 | `backend/agent_builder/registry.py` | The `Registry` of tools and edge guards an agent may name. It is injected into the builder and validator, so the generic compiler doesn't import the catalog. |
 | `backend/api.py` | Per-call agent selection, the `/start` preflight and the builder's `/api/agents` routes (file storage in `backend/agents/`), registered on the Pipecat runner's FastAPI app. |
 | `backend/catalog/` | The Phase 2 catalog domain, with no Pipecat or HTTP dependency: `models.py` (the typed, immutable catalog and caller facts), `index.py` (free-text matching with aliases, ambiguity and paging), `policy.py` (the booking rules: feasible options, violations with fixes, the next question), `availability.py` (a deterministic mock calendar with atomic, idempotent reservations), `session.py` (one caller's facts, draft, offers and booking), `tools.py` (the scheduler's tools and edge guards: argument and result models, handlers and LLM schemas, shared by every adapter), `lint.py` (catalog health checks) and `scenarios.py` (fixtures for the tricky cases). |
+| `backend/catalog_api.py` | The HTTP adapter: the `/api/catalog` routes, and the playground's sandbox sessions, each with its own calendar. |
 | `backend/catalog_voice.py` | The voice adapter: binds the catalog tools and guards into a `Registry`, keeping each call's session in `flow_manager.state["patient"]` and `["booking"]`. |
 | `backend/contract.py` | The backend/frontend JSON Schema contract (`make types`). |
 | `backend/tests/` | pytest suite (`make test`). |

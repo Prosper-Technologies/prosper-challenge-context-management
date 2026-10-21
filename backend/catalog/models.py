@@ -26,7 +26,10 @@ Title = Literal["MD", "DO", "NP", "PA"]
 
 
 class _Frozen(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    # Dumps include every field, so the serialization schema marks them all required.
+    model_config = ConfigDict(
+        extra="forbid", strict=True, frozen=True, json_schema_serialization_defaults_required=True
+    )
 
 
 class Location(_Frozen):
@@ -111,7 +114,7 @@ def default_catalog() -> Catalog:
 
 
 class _State(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, json_schema_serialization_defaults_required=True)
 
 
 class PatientFacts(_State):

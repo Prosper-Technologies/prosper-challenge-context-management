@@ -13,7 +13,8 @@
 #                                 before any WebRTC setup
 #
 # Validation and calls resolve node tools and edge guards against the catalog
-# registry (catalog_voice.py).
+# registry (catalog_voice.py). The catalog screen's routes (/api/catalog/...) are in
+# catalog_api.py and registered by install() too.
 #
 # Agents are stored one JSON file per agent in backend/agents/. A structurally
 # valid document is saved even if its graph has errors (so drafts can be saved and
@@ -35,6 +36,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from agent_builder import AgentBuilder, AgentConfig, AgentValidationError, Issue, Registry, parse, validate
+from catalog_api import PlaygroundSessions, playground
+from catalog_api import build_router as build_catalog_router
 from catalog_voice import default_registry
 
 AGENTS_DIR = Path(__file__).parent / "agents"
@@ -251,10 +254,13 @@ def missing_env() -> list[str]:
     return [name for name in REQUIRED_ENV if not os.environ.get(name, "").strip()]
 
 
-def install(app: FastAPI, agents: Optional[AgentStore] = None) -> None:
-    """Register the builder routes and the /start preflight on the runner's app."""
+def install(
+    app: FastAPI, agents: Optional[AgentStore] = None, sessions: Optional[PlaygroundSessions] = None
+) -> None:
+    """Register the builder and catalog routes and the /start preflight on the runner's app."""
     agents = agents or store
     app.include_router(build_router(agents))
+    app.include_router(build_catalog_router(sessions or playground))
 
     @app.middleware("http")
     async def preflight_start(request: Request, call_next):

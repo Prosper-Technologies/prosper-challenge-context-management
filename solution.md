@@ -2,7 +2,7 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
-The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent; the API, UI and benchmark (M7–M9) are still to come.
+The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, and [Milestone 7](#milestone-7-api-and-contract) the catalog API; the UI and benchmark (M8–M9) are still to come.
 
 ## Milestone 1: browser integration
 
@@ -256,7 +256,7 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 ## Phase 2: context-management design
 
-Status: M5 (the catalog domain) and M6 (tools and builder integration) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M7–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
+Status: M5 (the catalog domain), M6 (tools and builder integration) and M7 (the catalog API) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M8–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
 
 ### Deterministic catalog rules, conversational interpretation
 
@@ -444,3 +444,41 @@ The scheduler has seven nodes. `find_service` searches and records the service. 
 ### Not done in M6
 
 I haven't placed a voice call with the scheduler. The flow is tested through the real FlowManager with scripted tool calls, but how well gpt-4o follows the prompts and `next_question` is untested until a live call or M9's benchmark. The builder has no tool or guard controls yet (M8), and the HTTP tool API and its contract types are M7.
+
+## Milestone 7: API and contract
+
+`catalog_api.py` serves the catalog, its lint and the tool metadata, and runs tools for the playground. `api.install()` registers it next to the agent routes. It imports only the catalog domain and FastAPI: a test checks that importing it loads no Pipecat or `agent_builder` module.
+
+### A tool's failure is a result, not an HTTP error
+
+`POST /api/catalog/tools/{name}` calls the same `Tool.run` as a voice call. Invalid arguments, a rejected update or a booking error come back as a 200 whose `result` is the `{"error": ...}` the model would get. HTTP errors are only for the request itself: an unknown tool or session (404), an expired session (410), or a body that isn't `{session_id, args}` (422).
+
+- **Why:** the playground's job is to show what the model sees. Turning a rejected update into a 422 would hide the structured error and its hints, which are part of the tool's behaviour.
+- The response carries the session's full `state` after every call, so the UI's patient controls and draft view need no extra request. Patient controls send `update_booking` with explicit nulls, under the same rules as the model's calls.
+- A test runs the same calls through the voice adapter and the HTTP route and gets identical results.
+
+### Sandbox sessions refuse rather than replace
+
+Each playground session has its own `SchedulingSession` and `Calendar`, held only in `PlaygroundSessions`. A request names a session ID and can reach nothing else: voice sessions live in their call's flow state, and the voice calendar is never created by the playground (a test checks it).
+
+- Sessions expire after 30 minutes without a request. Expired IDs are remembered (up to 1000), so a late request gets a 410 that says the session expired, rather than a 404 or, worse, a new empty session under the old ID. The UI can explain that and keep showing the last result.
+- Expiry is checked on each request; there's no background task. Past 100 sessions, the least recently used one expires early, so abandoned tabs can't grow memory without bound.
+- Disposing of an expired session is a 204, since it's gone either way. Reset is a delete, then a new session.
+- A tool call runs under the store's lock, so two requests can't interleave inside one session's mutation. **Tradeoff:** that serializes all playground calls. They take milliseconds and the playground has one user, so a lock per session wasn't worth it.
+- The routes are plain `def` handlers, so FastAPI runs them in its thread pool rather than on the event loop the voice pipeline shares.
+
+### Contract
+
+The schema now covers the catalog, lint issues, the tool and guard metadata, playground sessions, tool run requests and responses, and every tool's argument and result models. `ToolArgs` and `ToolResults` are generated models with one field per tool, so the frontend gets `ToolArgs["update_booking"]` and `ToolResults["update_booking"]`. Tool and guard names are string unions.
+
+- Tool results are sent without fields at their defaults (M6). Their schemas are generated in validation mode, which marks defaulted fields optional, so the TypeScript types say `fields?:` where a result may leave `fields` out. The models that are always dumped in full (the catalog, `SessionState`, lint issues, the responses) are marked with every field required.
+- The catalog, lint and tool listings are computed once and served as cached JSON, since none of them changes while the server runs.
+- **Tradeoff:** `ToolRunResponse.result` is typed as an object, not a union keyed by the tool name. JSON Schema can't express "the result type for the tool in the URL", so the frontend narrows it with `ToolResults[name] | ToolErrorResult`.
+
+### Testing
+
+`tests/test_catalog_api.py` covers the catalog, lint and tool listings matching the domain, an empty new session, results with state and the token estimate, the Echo / David Chen / Richmond violation, a full booking, tool errors leaving the state unchanged, request errors, reset, inactivity expiry and the 410, the session limit, two sandboxes booking the same time, the voice calendar staying untouched, identical voice and HTTP results, and the import boundary. `test_contract.py` checks the new definitions, and `make check-types` passes. I also ran the real server and exercised lint, a session, the Echo violation and disposal with curl.
+
+### Not done in M7
+
+The frontend doesn't call these routes yet (M8).

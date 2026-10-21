@@ -1,6 +1,6 @@
 #
 # Catalog tools — the scheduler's tools and edge guards, as one registry shared by
-# every adapter (voice: catalog_voice.py; HTTP and evaluation later).
+# every adapter (voice: catalog_voice.py; HTTP: catalog_api.py; evaluation later).
 #
 #   Tool    name, description, argument model, result model, and a handler taking a
 #           ToolContext (the caller's session, a calendar and the index)

@@ -196,3 +196,8 @@ def test_validate_resolves_catalog_tools_and_guards(client):
     scheduler["nodes"][1]["tools"].append("teleport")
     issues = client.post("/api/agents/validate", json=scheduler).json()["issues"]
     assert [i["message"] for i in issues] == ["Unknown tool 'teleport'."]
+
+
+def test_install_registers_the_catalog_routes(client):
+    assert client.get("/api/catalog/tools").status_code == 200
+    assert client.post("/api/catalog/sessions").status_code == 201

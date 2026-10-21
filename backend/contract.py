@@ -1,6 +1,7 @@
 #
-# The backend/frontend contract, as one JSON Schema: the agent document plus the
-# API's response shapes. `make types` writes it to frontend/src/generated/ and
+# The backend/frontend contract, as one JSON Schema: the agent document, the
+# catalog, the catalog tools' arguments and results, and the API's request and
+# response shapes. `make types` writes it to frontend/src/generated/ and
 # generates the TypeScript types from it; tests/test_contract.py fails if the
 # committed schema is stale.
 #
@@ -13,6 +14,17 @@ from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 
 from agent_builder import AgentConfig, Issue
 from api import AgentSummary, IssuesResponse
+from catalog import Catalog
+from catalog_api import (
+    LintResponse,
+    PlaygroundSession,
+    ToolArgs,
+    ToolResults,
+    ToolRunRequest,
+    ToolRunResponse,
+    ToolsResponse,
+)
+from catalog.tools import ToolErrorResult
 
 TITLE = "AgentBuilderContract"
 
@@ -30,6 +42,17 @@ def json_schema() -> dict:
             (Issue, "serialization"),
             (AgentSummary, "serialization"),
             (IssuesResponse, "serialization"),
+            (Catalog, "serialization"),
+            (LintResponse, "serialization"),
+            (ToolsResponse, "serialization"),
+            (PlaygroundSession, "serialization"),
+            (ToolRunRequest, "validation"),
+            (ToolRunResponse, "serialization"),
+            # Tool results are sent without the fields at their defaults, which is
+            # what the validation schema says: those fields are optional.
+            (ToolArgs, "validation"),
+            (ToolResults, "validation"),
+            (ToolErrorResult, "validation"),
         ],
         title=TITLE,
         schema_generator=_ContractSchema,

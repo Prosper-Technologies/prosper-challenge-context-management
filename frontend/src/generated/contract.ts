@@ -178,6 +178,319 @@ export interface AgentSummary {
   name: string | null;
 }
 /**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "AppointmentType".
+ */
+export interface AppointmentType {
+  id: string;
+  name: string;
+  specialty: string;
+  duration_min: number;
+  requires_referral: boolean;
+  new_patients_allowed: boolean;
+  required_capability: ("imaging" | "lab" | "physical_therapy" | "dental" | "surgery") | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ArgError".
+ */
+export interface ArgError {
+  path: (string | number)[];
+  message: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Availability".
+ */
+export interface Availability {
+  revision: number;
+  today: string;
+  slots: SlotView[];
+  total: number;
+  truncated?: boolean;
+  other_days?: string[];
+  hint?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "SlotView".
+ */
+export interface SlotView {
+  id: string;
+  start: string;
+  label: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "AvailabilityArgs".
+ */
+export interface AvailabilityArgs {
+  /**
+   * Only this local date (YYYY-MM-DD).
+   */
+  day?: string | null;
+  part_of_day?: ("morning" | "afternoon") | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "BookAppointmentArgs".
+ */
+export interface BookAppointmentArgs {
+  /**
+   * The draft revision the caller confirmed.
+   */
+  draft_revision: number;
+  /**
+   * True only after the caller said yes to the read-back.
+   */
+  confirmed: boolean;
+}
+/**
+ * The caller's current choices. Nothing here is booked.
+ *
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "BookingDraft".
+ */
+export interface BookingDraft {
+  service_id: string | null;
+  provider_id: string | null;
+  location_id: string | null;
+  slot_id: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "BookingView".
+ */
+export interface BookingView {
+  draft: DraftView;
+  check: StatusView;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "DraftView".
+ */
+export interface DraftView {
+  revision: number;
+  patient: Facts;
+  service?: Ref | null;
+  provider?: Ref | null;
+  location?: Ref | null;
+  slot?: SlotView | null;
+  confirmed?: boolean;
+  confirmation?: string | null;
+}
+/**
+ * The caller's facts; null means not known yet.
+ *
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Facts".
+ */
+export interface Facts {
+  is_new_patient: boolean | null;
+  has_referral: boolean | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Ref".
+ */
+export interface Ref {
+  id: string;
+  name: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "StatusView".
+ */
+export interface StatusView {
+  status: "ready" | "needs_choice" | "blocked";
+  next_question?: Question | null;
+  options?: OptionView[];
+  total_options?: number;
+  truncated?: boolean;
+  violations?: Violation[];
+  hint?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Question".
+ */
+export interface Question {
+  kind: "fact" | "choice";
+  field: "service_id" | "provider_id" | "location_id" | "has_referral" | "is_new_patient";
+  prompt: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "OptionView".
+ */
+export interface OptionView {
+  service_id: string;
+  provider_id?: string | null;
+  location_id?: string | null;
+  label: string;
+  conditions?: ("has_referral" | "is_new_patient")[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Violation".
+ */
+export interface Violation {
+  code:
+    | "PROVIDER_NOT_AT_LOCATION"
+    | "PROVIDER_DOESNT_OFFER"
+    | "LOCATION_LACKS_CAPABILITY"
+    | "REFERRAL_REQUIRED"
+    | "TYPE_NOT_FOR_NEW_PATIENTS"
+    | "PROVIDER_NOT_ACCEPTING"
+    | "NOT_OFFERED"
+    | "NO_FEASIBLE_OPTION";
+  message: string;
+  fix: string;
+  fields?: ("service_id" | "provider_id" | "location_id")[];
+  facts?: ("has_referral" | "is_new_patient")[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Catalog".
+ */
+export interface Catalog {
+  policies: string[];
+  locations: Location[];
+  providers: Provider[];
+  appointment_types: AppointmentType[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Location".
+ */
+export interface Location {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  phone: string;
+  hours: string;
+  capabilities: ("imaging" | "lab" | "physical_therapy" | "dental" | "surgery")[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Provider".
+ */
+export interface Provider {
+  id: string;
+  name: string;
+  title: "MD" | "DO" | "NP" | "PA";
+  specialty: string;
+  location_ids: string[];
+  accepting_new_patients: boolean;
+  languages: string[];
+  appointment_type_ids: string[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "CatalogIssue".
+ */
+export interface CatalogIssue {
+  level: "error" | "warning";
+  code:
+    | "UNBOOKABLE_TYPE"
+    | "NEW_PATIENT_DEAD_END"
+    | "DUPLICATE_PROVIDER_NAME"
+    | "DR_TITLE_ON_NON_PHYSICIAN"
+    | "CONFUSABLE_LOCATIONS"
+    | "UNUSED_CAPABILITY";
+  path: (string | number)[];
+  refs: string[];
+  message: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "CheckBookingArgs".
+ */
+export interface CheckBookingArgs {}
+/**
+ * An earlier choice an update removed because it no longer fits.
+ *
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Cleared".
+ */
+export interface Cleared {
+  field: "service_id" | "provider_id" | "location_id" | "slot_id";
+  value: string;
+  reason: string;
+  message: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ErrorDetail".
+ */
+export interface ErrorDetail {
+  code: string;
+  message: string;
+  errors?: ArgError[];
+  violations?: Violation[];
+  next_question?: Question | null;
+  hint?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Excluded".
+ */
+export interface Excluded {
+  id: string;
+  name: string;
+  reason: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "FindLocationsArgs".
+ */
+export interface FindLocationsArgs {
+  /**
+   * The place the caller said, e.g. 'downtown'.
+   */
+  query?: string | null;
+  service_id?: string | null;
+  provider_id?: string | null;
+  cursor?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "FindProvidersArgs".
+ */
+export interface FindProvidersArgs {
+  /**
+   * The name the caller said, e.g. 'Dr. Chen'.
+   */
+  name?: string | null;
+  service_id?: string | null;
+  location_id?: string | null;
+  language?: string | null;
+  /**
+   * The provider's own specialty label.
+   */
+  specialty?: string | null;
+  cursor?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "GuardSpec".
+ */
+export interface GuardSpec {
+  name: "service_chosen" | "booking_ready" | "slot_selected" | "booking_completed";
+  description: string;
+  completes: (
+    | "catalog_overview"
+    | "search_services"
+    | "find_providers"
+    | "find_locations"
+    | "update_booking"
+    | "check_booking"
+    | "get_availability"
+    | "book_appointment"
+  )[];
+}
+/**
  * One problem with an agent document.
  *
  * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
@@ -197,4 +510,331 @@ export interface Issue {
 export interface IssuesResponse {
   issues: Issue[];
   malformed: boolean;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "LintResponse".
+ */
+export interface LintResponse {
+  issues: CatalogIssue[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "LocationCard".
+ */
+export interface LocationCard {
+  id: string;
+  name: string;
+  capabilities?: string[];
+  conditions?: ("has_referral" | "is_new_patient")[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "LocationSearch".
+ */
+export interface LocationSearch {
+  total_matches: number;
+  ambiguous?: boolean;
+  clarify?: string | null;
+  truncated?: boolean;
+  next_cursor?: string | null;
+  excluded?: Excluded[];
+  hint?: string | null;
+  locations: LocationCard[];
+  violations?: Violation[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Offer".
+ */
+export interface Offer {
+  revision: number;
+  slots: Slot[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Slot".
+ */
+export interface Slot {
+  id: string;
+  service_id: string;
+  provider_id: string;
+  location_id: string;
+  start: string;
+  end: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Overview".
+ */
+export interface Overview {
+  section: "locations" | "specialties";
+  locations?: LocationCard[];
+  specialties?: {
+    [k: string]: number;
+  };
+  not_offered?: string[];
+  next_cursor?: string | null;
+  hint?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "OverviewArgs".
+ */
+export interface OverviewArgs {
+  cursor?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "PatientArgs".
+ */
+export interface PatientArgs {
+  /**
+   * True if the caller has never been seen at our clinics.
+   */
+  is_new_patient?: boolean | null;
+  /**
+   * Whether a referral is on file for the service.
+   */
+  has_referral?: boolean | null;
+}
+/**
+ * What the caller has told us about themselves. None means not known yet.
+ *
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "PatientFacts".
+ */
+export interface PatientFacts {
+  is_new_patient: boolean | null;
+  has_referral: boolean | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "PlaygroundSession".
+ */
+export interface PlaygroundSession {
+  session_id: string;
+  state: SessionState;
+  ttl_s: number;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "SessionState".
+ */
+export interface SessionState {
+  id: string;
+  patient: PatientFacts;
+  draft: BookingDraft;
+  revision: number;
+  confirmed: boolean;
+  offer: Offer | null;
+  reservation: Receipt | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "Receipt".
+ */
+export interface Receipt {
+  confirmation: string;
+  slot: Slot;
+  patient: PatientFacts;
+  session_id: string;
+  draft_revision: number;
+  booked_at: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ProviderCard".
+ */
+export interface ProviderCard {
+  id: string;
+  name: string;
+  title: string;
+  specialty: string;
+  accepting_new_patients: boolean;
+  languages: string[];
+  locations: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ProviderSearch".
+ */
+export interface ProviderSearch {
+  total_matches: number;
+  ambiguous?: boolean;
+  clarify?: string | null;
+  truncated?: boolean;
+  next_cursor?: string | null;
+  excluded?: Excluded[];
+  hint?: string | null;
+  providers: ProviderCard[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ReceiptView".
+ */
+export interface ReceiptView {
+  confirmation: string;
+  service: string;
+  provider: string;
+  location: string;
+  start: string;
+  duration_min: number;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "SearchServicesArgs".
+ */
+export interface SearchServicesArgs {
+  /**
+   * What the caller asked for, in their words (e.g. 'knee MRI').
+   */
+  query: string;
+  /**
+   * Only services with this specialty label.
+   */
+  specialty?: string | null;
+  cursor?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ServiceCard".
+ */
+export interface ServiceCard {
+  id: string;
+  name: string;
+  specialty: string;
+  duration_min: number;
+  requires_referral: boolean;
+  new_patients_allowed: boolean;
+  notes?: string[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ServiceSearch".
+ */
+export interface ServiceSearch {
+  total_matches: number;
+  ambiguous?: boolean;
+  clarify?: string | null;
+  truncated?: boolean;
+  next_cursor?: string | null;
+  excluded?: Excluded[];
+  hint?: string | null;
+  services: ServiceCard[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolArgs".
+ */
+export interface ToolArgs {
+  catalog_overview: OverviewArgs;
+  search_services: SearchServicesArgs;
+  find_providers: FindProvidersArgs;
+  find_locations: FindLocationsArgs;
+  update_booking: UpdateBookingArgs;
+  check_booking: CheckBookingArgs;
+  get_availability: AvailabilityArgs;
+  book_appointment: BookAppointmentArgs;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "UpdateBookingArgs".
+ */
+export interface UpdateBookingArgs {
+  /**
+   * Facts the caller stated; null for one fact clears it.
+   */
+  patient?: PatientArgs | null;
+  service_id?: string | null;
+  provider_id?: string | null;
+  location_id?: string | null;
+  /**
+   * A slot id from get_availability that the caller picked.
+   */
+  slot_id?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolErrorResult".
+ */
+export interface ToolErrorResult {
+  error: ErrorDetail;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolResults".
+ */
+export interface ToolResults {
+  catalog_overview: Overview;
+  search_services: ServiceSearch;
+  find_providers: ProviderSearch;
+  find_locations: LocationSearch;
+  update_booking: UpdateView;
+  check_booking: BookingView;
+  get_availability: Availability;
+  book_appointment: ReceiptView;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "UpdateView".
+ */
+export interface UpdateView {
+  draft: DraftView;
+  check: StatusView;
+  changed: boolean;
+  cleared?: Cleared[];
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolRunRequest".
+ */
+export interface ToolRunRequest {
+  session_id: string;
+  args?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolRunResponse".
+ */
+export interface ToolRunResponse {
+  result: {
+    [k: string]: unknown;
+  };
+  state: SessionState;
+  /**
+   * Estimated size of `result` (about 4 characters a token), not a tokenizer count.
+   */
+  approx_tokens: number;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolSpec".
+ */
+export interface ToolSpec {
+  name:
+    | "catalog_overview"
+    | "search_services"
+    | "find_providers"
+    | "find_locations"
+    | "update_booking"
+    | "check_booking"
+    | "get_availability"
+    | "book_appointment";
+  description: string;
+  parameters: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ToolsResponse".
+ */
+export interface ToolsResponse {
+  tools: ToolSpec[];
+  guards: GuardSpec[];
 }
