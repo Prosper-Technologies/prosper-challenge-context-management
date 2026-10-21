@@ -173,7 +173,7 @@ Stretch goals:
 
 # Phase 2: Context management plan
 
-Status: proposed work; M5–M9 are not implemented. The rationale and trade-offs are recorded in [solution.md](solution.md#phase-2-context-management-design).
+Status: M5 is implemented (see [solution.md](solution.md#milestone-5-catalog-domain-and-policy-engine)); M6–M9 are proposed work. The rationale and trade-offs are recorded in [solution.md](solution.md#phase-2-context-management-design).
 
 ## 1. Problem
 

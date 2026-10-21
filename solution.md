@@ -2,7 +2,7 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
-The [Phase 2 section](#phase-2-context-management-design) records proposed context-management decisions and their rationale. It is a design, not an implementation or benchmark report.
+The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core; the tools, API, UI and benchmark (M6–M9) are still to come.
 
 ## Milestone 1: browser integration
 
@@ -256,7 +256,7 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 ## Phase 2: context-management design
 
-Status: proposed. [M5–M9 in PLAN.md](PLAN.md#phase-2-context-management-plan) define the implementation and verification work. No Phase 2 performance or accuracy results have been measured yet.
+Status: M5 (the catalog domain) is implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M6–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
 
 ### Deterministic catalog rules, conversational interpretation
 
@@ -320,3 +320,70 @@ Scenario fixtures and deterministic outcome checks will be established with the 
 - **Tradeoff:** a live caller simulator introduces variation even with fixed scenarios. Run three repetitions, retain traces and version/configuration metadata, and use deterministic checks on the resulting state instead of asking the simulator to judge its own conversation. Report simulator usage separately so it does not obscure scheduler cost.
 - Measure total input/output/cached tokens where supplied, tool calls, prompt growth, turns and latency. Clearly label playground token counts as estimates and record the pricing assumptions behind evaluation cost estimates.
 - The installed FlowManager defaults to appending context. Replacing the tools exposed at each node does not remove earlier tool results or instructions. Repeated searches and late corrections must therefore be included in the benchmark. If accumulated context materially increases cost or latency, compare a deterministic state summary at node boundaries while preserving unresolved preferences and recent caller context. Adopt resets only after checking outcome correctness; adding an LLM summarization call has its own latency and information-loss costs.
+
+## Milestone 5: catalog domain and policy engine
+
+`backend/catalog/` is plain Python and Pydantic. A test checks that importing it loads no Pipecat or FastAPI module. Nothing is wired into calls or the API yet; that's M6 and M7.
+
+### An immutable, checked catalog
+
+The catalog models are frozen and use tuples, and `default_catalog()` loads the file once per process. Loading rejects duplicate IDs, unknown cross-references, unknown capabilities and coerced values such as `"yes"` for a boolean.
+
+- **Why:** the catalog, its ID maps and the 760 static triples are shared by every call. A call can't change them by accident.
+- **Tradeoff:** `Capability` is a closed list, so adding a capability to the data is also a code change. A typo fails loudly instead of quietly making a service unbookable.
+- The agent `Issue` model lives in `agent_builder`, which imports Pipecat. Lint therefore has its own `CatalogIssue` with the same `{level, path, message}` plus a `code` and the `refs` it's about. M8's issue renderer can take either.
+
+### The order of questions
+
+`narrow()` asks for the service first, then any patient fact a remaining option depends on (referral before new-patient status), then the provider, then the location. Options are grouped by the field being asked. For "knee MRI" with an existing patient, the provider question lists exactly the two valid combinations: Ramirez at Downtown and Nguyen at Midtown.
+
+- An unknown fact is a *condition* on an option, never a pass or a fail. New-patient status is asked only when it matters: an accepting provider with a type open to new patients is `ready` without it.
+- A one-option draft still asks. The engine never chooses for the caller.
+- **Addition:** a `NO_FEASIBLE_OPTION` code. Some drafts pass every pairwise rule but have no completion, such as a cardiology consultation at North Gate, where no cardiologist works. When patient facts rule out every remaining option, one aggregated violation is reported for the draft. "New patient, OB/GYN" is `PROVIDER_NOT_ACCEPTING` before a provider is named.
+
+### Corrections: newest explicit choice wins, downstream only
+
+The plan says to keep explicit infeasible requests and to clear stale downstream choices. It doesn't say what "downstream" means, so I made it an order: facts, then service, then provider, then location, then slot. An update clears an earlier choice only if it comes after the earliest thing that changed, in that order, and now conflicts. Choices made in the same update are never cleared.
+
+- Changing the service to one the provider doesn't offer clears the provider. Moving an MRI to a location without imaging keeps the MRI and reports `LOCATION_LACKS_CAPABILITY` with the locations that work. Dropping the caller's actual need to make a location fit would be worse.
+- A fact change never clears the service. If the caller says they have no referral after all, the MRI stays and the draft is blocked with `REFERRAL_REQUIRED`. Asking "what do you need?" again would be wrong. A provider who isn't accepting new patients is cleared, and the location is kept.
+- Every cleared field is returned with the violation that cleared it, so the agent can tell the caller why.
+- **Tradeoff:** "newest wins" sometimes removes something the caller still wanted. It's predictable and always reported, and the alternative (refusing the correction) makes the caller repeat themselves.
+
+### Offers, confirmation and booking
+
+Offers belong to a draft revision. Selecting an offered slot increments the revision and carries the offer forward, and offers from several `offer_times` calls in one revision accumulate, so "the earlier one" still works. A slot can't be selected in the same update that changes the choices.
+
+- Confirmation is session state: `confirm(revision)` records it, any change clears it, and `book(calendar, revision)` requires it. M6's `book_appointment(draft_revision, confirmed)` will call both.
+- Idempotency works at two levels. The session returns its own receipt for a retry of the same revision. The calendar keys receipts by `session:revision`, so a retry from state saved before the receipt was written gets the first receipt instead of a second booking. A test covers each case.
+- A session that already has a booking refuses another one (`ALREADY_BOOKED`), since rescheduling is out of scope.
+
+### The mock calendar
+
+A provider's base schedule at a location on a day is a SHA-256 digest of (provider, location, date). It decides whether they work there that day (about 1 in N days for N locations), and which half-hour blocks are already taken (about a third). Slots are laid out back to back from 08:00 at the service's duration, on local weekdays, for 14 local days.
+
+- **Tradeoff:** the base schedules of a multi-location provider can overlap across clinics, which a real calendar wouldn't allow. Reservations can't overlap, though: they occupy the provider's time everywhere. The overlap scenario books a 45-minute echo at Mission District, and a 20-minute EKG at Mission Bay that overlaps it is then refused.
+- Reservation revalidates the time window, the base schedule and overlaps under one lock. A test with eight threads booking one slot gets exactly one receipt.
+- A subprocess test with a different `PYTHONHASHSEED` gets the same slots, and the first day's times are pinned.
+
+### Matching
+
+Search returns only the best tier (exact, alias, every query word, fuzzy every word, at least half the words). Exact and alias matches also keep entries that contain every query word, so "blood test" finds Blood Draw by alias and still lists Fasting Blood Test. A query with nothing at the `partial` level or better matches nothing.
+
+- `ambiguous` means more than one match in the best tier, computed before paging, and `clarify` names the first attribute that tells them apart (specialty, then location, title, language). "Dr. Chen" returns 5 of 7 with `next_cursor`, and the second page has the other two.
+- Filters run before the cap. A named provider ruled out by a filter is listed in `excluded` with the reason ("doesn't offer MRI - Knee") rather than replaced by a different person.
+- **Tradeoff:** lexical matching can't recover sounds-alike names that are spelled very differently, such as "Win" for Nguyen. The aliases and first-name variants cover the common cases without a new dependency.
+
+### Lint
+
+Errors are things a caller can ask for and never book: 8 unbookable types (ophthalmology, PT, urology) and 6 new-patient dead ends (OB/GYN and the Endocrinology consultation). Warnings are things that invite mistakes: 3 duplicate names, 13 NP/PAs titled "Dr.", 2 confusable location pairs and 5 unused capabilities. Those include the physical therapy rooms at two locations with no PT provider, and lab capability at three locations where the only lab provider doesn't work. Every issue path is checked against the raw JSON.
+
+### Scenarios
+
+`data/scenarios.json` has 17 scenarios. Each has the caller's facts and opening line, the intended outcome (a reservation pattern, or a block for a given reason), and a step-by-step script of searches, updates, offers and bookings with expected results. `tests/test_scenarios.py` replays the scripts with a fixed clock and a fresh calendar, then checks the outcome against session state using the same `check_outcome` M9 will use. They cover the plan's policy table, ambiguity and paging, late corrections, atomic invalid updates, stale confirmation and overlapping reservations.
+
+- **Tradeoff:** the scripts pin exact option lists and slot positions, so a change to ranking or the calendar generator means updating expectations. That's deliberate: such changes should be visible.
+
+### Not done in M5
+
+The tool registry, builder guards, `scheduler.json` (M6), the catalog API and contract types (M7), the UI (M8) and the live benchmark (M9). `make types` is unchanged because no API shape changed yet.
