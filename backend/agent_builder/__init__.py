@@ -2,6 +2,7 @@
 that compiles it into a runnable Pipecat Flows graph."""
 
 from .builder import AgentBuilder
+from .registry import EMPTY_REGISTRY, GuardBinding, Registry, ToolBinding
 from .schema import AgentConfig, Edge, Node
 from .validation import AgentValidationError, Issue, parse, validate
 
@@ -14,4 +15,8 @@ __all__ = [
     "Issue",
     "parse",
     "validate",
+    "Registry",
+    "ToolBinding",
+    "GuardBinding",
+    "EMPTY_REGISTRY",
 ]

@@ -63,6 +63,10 @@ export interface Node {
    */
   role_message?: string | null;
   edges?: Edge[];
+  /**
+   * Registry tools the node exposes besides its edges.
+   */
+  tools?: string[];
   pre_actions?: (TtsSayAction | EndConversationAction | Action)[];
   post_actions?: (TtsSayAction | EndConversationAction | Action)[];
   /**
@@ -109,6 +113,10 @@ export interface Edge {
     [k: string]: PropertySchema;
   };
   required?: string[];
+  /**
+   * A named check that must pass before the edge is taken (see the registry).
+   */
+  guard?: string | null;
   [k: string]: unknown;
 }
 /**

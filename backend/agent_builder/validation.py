@@ -16,6 +16,7 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from .registry import EMPTY_REGISTRY, Registry
 from .schema import (
     SUPPORTED_ACTIONS,
     AgentConfig,
@@ -147,22 +148,24 @@ def _index(items: Any, i: PathPart) -> Any:
 # ---- graph / runtime validation ------------------------------------------------
 
 
-def validate(config: Union[AgentConfig, Any]) -> list[Issue]:
+def validate(config: Union[AgentConfig, Any], registry: Registry = EMPTY_REGISTRY) -> list[Issue]:
     """Every issue with an agent: structural ones if it doesn't parse, else graph ones.
 
-    Pure: the document is not modified. Errors mean the agent can't run; warnings
-    point at likely mistakes but don't block a call.
+    Node tools and edge guards must be names in `registry`. Pure: the document is
+    not modified. Errors mean the agent can't run; warnings point at likely
+    mistakes but don't block a call.
     """
     if not isinstance(config, AgentConfig):
         config, issues = parse(config)
         if config is None:
             return issues
-    return _GraphCheck(config).run()
+    return _GraphCheck(config, registry).run()
 
 
 class _GraphCheck:
-    def __init__(self, config: AgentConfig):
+    def __init__(self, config: AgentConfig, registry: Registry):
         self.config = config
+        self.registry = registry
         self.issues: list[Issue] = []
 
     def add(self, level, path, message, node=None, edge=None) -> None:
@@ -184,6 +187,8 @@ class _GraphCheck:
 
         for i, node in enumerate(config.nodes):
             self._node(i, node, names)
+
+        self._completion_guards()
 
         if config.initial_node in names:
             reachable = self._reachable(config.initial_node)
@@ -236,6 +241,7 @@ class _GraphCheck:
         functions = Counter(e.function for e in node.edges)
         for j, edge in enumerate(node.edges):
             self._edge(path + ["edges", j], node, edge, names, functions)
+        self._tools(path, node, functions)
 
         for field in ("pre_actions", "post_actions"):
             for k, action in enumerate(getattr(node, field)):
@@ -261,6 +267,17 @@ class _GraphCheck:
         elif edge.target not in names:
             self.add("error", path + ["target"], f"Unknown target node '{edge.target}'.", **context)
 
+        if edge.guard is not None and edge.guard not in self.registry.guards:
+            self.add("error", path + ["guard"], f"Unknown guard '{edge.guard}'.", **context)
+
+        for prop_name in edge.properties:
+            if prop_name in self.registry.state_keys:
+                self.add(
+                    "warning",
+                    path + ["properties", prop_name],
+                    f"'{prop_name}' is kept by the tools, so this edge can't collect it.",
+                    **context,
+                )
         for k, prop in enumerate(edge.required):
             if prop not in edge.properties:
                 self.add(
@@ -279,6 +296,47 @@ class _GraphCheck:
                         f"'{t}' is not a JSON-schema type.",
                         **context,
                     )
+
+    def _tools(self, path, node, functions: Counter) -> None:
+        seen: set[str] = set()
+        for k, tool in enumerate(node.tools):
+            where = path + ["tools", k]
+            if tool not in self.registry.tools:
+                self.add("error", where, f"Unknown tool '{tool}'.", node=node.name)
+            elif tool in seen:
+                self.add("error", where, f"Tool '{tool}' is listed twice.", node=node.name)
+            elif tool in functions:
+                self.add("error", where, f"Tool '{tool}' has the same name as an edge function.", node=node.name)
+            seen.add(tool)
+
+    def _completion_guards(self) -> None:
+        """An agent that can book must end in success only through the guard that
+        checks the booking: no edge into that end node may skip it."""
+        nodes = self.config.nodes
+        used = {t for n in nodes for t in n.tools}
+        ends = {n.name for n in nodes if n.end}
+        for guard in self.registry.guards.values():
+            tools = sorted(used & guard.completes)
+            if not tools:
+                continue
+            guarded = {e.target for n in nodes for e in n.edges if e.guard == guard.name}
+            if not guarded & ends:
+                self.add(
+                    "error",
+                    ["nodes"],
+                    f"Nodes use {', '.join(tools)}, so an end node must be entered through the "
+                    f"'{guard.name}' guard.",
+                )
+            for i, node in enumerate(nodes):
+                for j, edge in enumerate(node.edges):
+                    if edge.target in guarded and edge.guard != guard.name:
+                        self.add(
+                            "error",
+                            ["nodes", i, "edges", j, "guard"],
+                            f"Edges into '{edge.target}' need the '{guard.name}' guard; this one skips it.",
+                            node=node.name,
+                            edge=edge.function,
+                        )
 
     def _action(self, path, action, node: str) -> None:
         if isinstance(action, TtsSayAction):

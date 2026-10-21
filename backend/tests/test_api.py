@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -187,3 +188,11 @@ def test_saved_file_is_formatted_json(client, store):
 
     assert text.endswith("}\n") and '\n  "name": "Café"' in text
     assert json.loads(text)["name"] == "Café"
+
+
+def test_validate_resolves_catalog_tools_and_guards(client):
+    scheduler = json.loads((Path(__file__).parent.parent / "agents" / "scheduler.json").read_text())
+    assert client.post("/api/agents/validate", json=scheduler).json() == {"issues": [], "malformed": False}
+    scheduler["nodes"][1]["tools"].append("teleport")
+    issues = client.post("/api/agents/validate", json=scheduler).json()["issues"]
+    assert [i["message"] for i in issues] == ["Unknown tool 'teleport'."]

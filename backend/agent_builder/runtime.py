@@ -9,6 +9,10 @@
 # end_conversation) have not run yet. Verified against pipecat-ai-flows 1.4.0; the
 # integration tests in tests/test_runtime.py pin this behaviour.
 #
+# Tools change the state without a transition, so the builder also calls
+# `report_state` after such a change, which sends a separate `state_updated`
+# event. It never counts as a node entry.
+#
 
 import json
 from typing import Any, Awaitable, Callable, Optional
@@ -17,6 +21,7 @@ from loguru import logger
 from pipecat_flows import FlowManager
 
 NodeEnteredCallback = Callable[[dict], Awaitable[None]]
+StateUpdatedCallback = Callable[[dict], Awaitable[None]]
 TransitionFailedCallback = Callable[[Exception], Awaitable[None]]
 
 
@@ -34,6 +39,9 @@ class TrackingFlowManager(FlowManager):
     node's context and tools are in place and before its post-actions run, so a
     terminal node is reported before end_conversation shuts the call down. A node
     whose activation fails is never reported.
+
+    `on_state_updated` receives `{type: "state_updated", node, via, state}` when a
+    tool (`via`) changed the state while `node` stayed active.
     """
 
     def __init__(
@@ -41,11 +49,13 @@ class TrackingFlowManager(FlowManager):
         *,
         on_node_entered: NodeEnteredCallback,
         on_transition_failed: Optional[TransitionFailedCallback] = None,
+        on_state_updated: Optional[StateUpdatedCallback] = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self._on_node_entered = on_node_entered
         self._on_transition_failed = on_transition_failed
+        self._on_state_updated = on_state_updated
         self._via: Optional[str] = None
         self._entering: Optional[dict] = None  # the activation in progress, until reported
 
@@ -77,6 +87,13 @@ class TrackingFlowManager(FlowManager):
         if post_actions:
             await self._report_entry()
             await super()._execute_actions(post_actions=post_actions)
+
+    async def report_state(self, via: str) -> None:
+        if self._on_state_updated is None:
+            return
+        await self._on_state_updated(
+            {"type": "state_updated", "node": self._current_node, "via": via, "state": _json_snapshot(self.state)}
+        )
 
     async def _report_entry(self) -> None:
         entry, self._entering = self._entering, None

@@ -30,7 +30,7 @@ def test_default_catalog_loads_once():
 
 
 def test_domain_has_no_pipecat_or_http_dependency():
-    script = "import sys, catalog, catalog.scenarios; print(sorted(m for m in sys.modules if m.split('.')[0] in {'pipecat', 'pipecat_flows', 'fastapi'}))"
+    script = "import sys, catalog, catalog.scenarios, catalog.tools; print(sorted(m for m in sys.modules if m.split('.')[0] in {'pipecat', 'pipecat_flows', 'fastapi'}))"
     out = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parent.parent, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "[]"
 

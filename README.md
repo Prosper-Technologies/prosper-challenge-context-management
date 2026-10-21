@@ -74,6 +74,15 @@ Agents are saved one JSON file per agent in `backend/agents/` through the builde
 
 Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, path, node, edge, message}`, where `path` locates the value (e.g. `["nodes", 2, "edges", 0, "target"]`).
 
+### The scheduler agent (Phase 2)
+
+`backend/agents/scheduler.json` books against the clinic catalog through tools instead of a catalog in the prompt: greeting → find_service → choose_provider_location → offer_times → confirm → success, with a `handoff` end node for anything it can't book. Open it in the builder and test-call it like any agent.
+
+- **Node tools.** A node's `tools` lists the catalog tools it exposes besides its edges (`search_services`, `find_providers`, `find_locations`, `update_booking`, `check_booking`, `get_availability`, `book_appointment`, `catalog_overview`). A tool runs without leaving the node; when it changes the booking, the call panel's collected state updates from a `state_updated` server message (not a path step).
+- **Edge guards.** An edge's optional `guard` names a check that must pass first (`service_chosen`, `booking_ready`, `slot_selected`, `booking_completed`). A failed guard keeps the node active and tells the model what's missing. `success` is entered only through `booking_completed`, i.e. after a real reservation.
+- **Validation** knows the registry: unknown tools or guards, a tool that clashes with an edge function, and an agent that books without a guarded success end node are errors. The editor doesn't have tool or guard controls yet (M8); the JSON view edits them, and form edits keep them.
+- Bookings are held in memory in one calendar shared by voice calls, and reset when the backend restarts.
+
 ### Development
 
 `make test` runs the backend (pytest) and frontend (vitest) tests. `make types` regenerates the frontend's TypeScript types (`frontend/src/generated/`) from the backend's JSON Schema, and `make check-types` fails if they're stale. Python dependencies install from `backend/requirements-dev.lock`; `make lock` re-resolves it with [uv](https://docs.astral.sh/uv/) after a deliberate change to `requirements*.txt`.
@@ -84,13 +93,16 @@ Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, pat
 | --- | --- |
 | `backend/bot.py` | The voice pipeline (WebRTC + ElevenLabs STT/TTS + OpenAI LLM). Loads an agent JSON via `AgentBuilder` and runs it. No graph logic lives here. |
 | `backend/agent_builder/` | All agent-building code. `schema.py` = the declarative `AgentConfig` / `Node` / `Edge` contract (Pydantic models; unknown fields are preserved); `validation.py` = structural parsing and graph/runtime checks, reported as issues; `builder.py` = `AgentBuilder`, which refuses agents with errors and compiles the rest into a Pipecat Flows graph. |
-| `backend/agent_builder/runtime.py` | `TrackingFlowManager` (reports confirmed node activations as `node_entered`) and `ClientReadyGate` (holds RTVI messages until the client is ready). |
+| `backend/agent_builder/runtime.py` | `TrackingFlowManager` (reports confirmed node activations as `node_entered`, and tool state changes as `state_updated`) and `ClientReadyGate` (holds RTVI messages until the client is ready). |
+| `backend/agent_builder/registry.py` | The `Registry` of tools and edge guards an agent may name. It is injected into the builder and validator, so the generic compiler doesn't import the catalog. |
 | `backend/api.py` | Per-call agent selection, the `/start` preflight and the builder's `/api/agents` routes (file storage in `backend/agents/`), registered on the Pipecat runner's FastAPI app. |
-| `backend/catalog/` | The Phase 2 catalog domain, with no Pipecat or HTTP dependency: `models.py` (the typed, immutable catalog and caller facts), `index.py` (free-text matching with aliases, ambiguity and paging), `policy.py` (the booking rules: feasible options, violations with fixes, the next question), `availability.py` (a deterministic mock calendar with atomic, idempotent reservations), `session.py` (one caller's facts, draft, offers and booking), `lint.py` (catalog health checks) and `scenarios.py` (fixtures for the tricky cases). |
+| `backend/catalog/` | The Phase 2 catalog domain, with no Pipecat or HTTP dependency: `models.py` (the typed, immutable catalog and caller facts), `index.py` (free-text matching with aliases, ambiguity and paging), `policy.py` (the booking rules: feasible options, violations with fixes, the next question), `availability.py` (a deterministic mock calendar with atomic, idempotent reservations), `session.py` (one caller's facts, draft, offers and booking), `tools.py` (the scheduler's tools and edge guards: argument and result models, handlers and LLM schemas, shared by every adapter), `lint.py` (catalog health checks) and `scenarios.py` (fixtures for the tricky cases). |
+| `backend/catalog_voice.py` | The voice adapter: binds the catalog tools and guards into a `Registry`, keeping each call's session in `flow_manager.state["patient"]` and `["booking"]`. |
 | `backend/contract.py` | The backend/frontend JSON Schema contract (`make types`). |
 | `backend/tests/` | pytest suite (`make test`). |
 | `frontend/` | The builder UI (Vite + React + TS). `src/editor/` holds the document model: pure document actions, the undoable Zustand store, layout, validation, keyboard shortcuts and the agent flows (open, save, import/export, test call). `src/components/` holds the canvas (React Flow), inspector, JSON view and call panel. Test calls use `@pipecat-ai/client-js` over SmallWebRTC through the Vite proxy. `src/generated/` holds the generated contract types. |
 | `backend/agents/example.json` | The example agent **as data** — a clinic scheduler, and the agent a call runs when it selects none. The starting point for the Phase 2 context-management work. |
+| `backend/agents/scheduler.json` | The Phase 2 scheduler: the catalog tools on each node and guarded transitions to a booking. |
 | `backend/data/catalog.json` | A deliberately large, deliberately messy clinic catalog (locations, providers, appointment types, booking rules) for the Phase 2 work. See [`backend/data/README.md`](backend/data/README.md). |
 
 Each call picks its agent from the `/start` body: `{"agent": {...}}` runs that document inline, `{"agent_id": "..."}` runs a saved agent, and with neither, `agents/example.json` runs. An invalid inline agent or an unknown/invalid saved one is rejected at `/start` (HTTP 422, with `issues`) rather than falling back to the example, and so is any call while an API key is missing.

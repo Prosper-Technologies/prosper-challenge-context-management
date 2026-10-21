@@ -12,6 +12,9 @@
 #                                 selection, or a missing API key, is rejected with 422
 #                                 before any WebRTC setup
 #
+# Validation and calls resolve node tools and edge guards against the catalog
+# registry (catalog_voice.py).
+#
 # Agents are stored one JSON file per agent in backend/agents/. A structurally
 # valid document is saved even if its graph has errors (so drafts can be saved and
 # repaired later); it just can't run. A malformed one is rejected (422) and the
@@ -31,7 +34,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from agent_builder import AgentBuilder, AgentConfig, AgentValidationError, Issue, parse, validate
+from agent_builder import AgentBuilder, AgentConfig, AgentValidationError, Issue, Registry, parse, validate
+from catalog_voice import default_registry
 
 AGENTS_DIR = Path(__file__).parent / "agents"
 DEFAULT_AGENT_ID = "example"  # runs when a call selects no agent
@@ -138,7 +142,9 @@ class AgentSelectionError(ValueError):
         self.issues = issues or []
 
 
-def select_agent(body: Optional[dict], agents: Optional[AgentStore] = None) -> AgentBuilder:
+def select_agent(
+    body: Optional[dict], agents: Optional[AgentStore] = None, registry: Optional[Registry] = None
+) -> AgentBuilder:
     """Pick the agent a call runs, from the runner's per-call `body`.
 
     `body.agent` (an inline draft) wins over `body.agent_id` (a saved agent); with
@@ -164,7 +170,7 @@ def select_agent(body: Optional[dict], agents: Optional[AgentStore] = None) -> A
             raise AgentSelectionError(f"Saved {source} can't be read: {e}") from e
 
     try:
-        return AgentBuilder.from_dict(data)
+        return AgentBuilder.from_dict(data, registry or default_registry())
     except AgentValidationError as e:
         raise AgentSelectionError(f"Invalid {source}: {e}", e.issues) from e
 
@@ -207,7 +213,7 @@ def build_router(agents: AgentStore) -> APIRouter:
         config, issues = parse(await _json_body(request))
         if config is None:
             return _issues_response(issues, malformed=True)
-        return _issues_response(validate(config))
+        return _issues_response(validate(config, default_registry()))
 
     @router.get("/{agent_id}")
     async def get_agent(agent_id: str) -> Any:
@@ -226,7 +232,7 @@ def build_router(agents: AgentStore) -> APIRouter:
         if config is None:
             return _issues_response(issues, malformed=True, status_code=422)
         agents.save(agent_id, config)
-        return _issues_response(validate(config))
+        return _issues_response(validate(config, default_registry()))
 
     @router.delete("/{agent_id}", status_code=204)
     async def delete_agent(agent_id: str):

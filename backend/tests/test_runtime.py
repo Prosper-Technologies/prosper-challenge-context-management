@@ -2,6 +2,9 @@
 transition path with fake LLM/transport plumbing (no network)."""
 
 import copy
+import json
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,16 +16,18 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat_flows import FlowInitializationError
 
-from agent_builder import AgentBuilder
+from agent_builder import EMPTY_REGISTRY, AgentBuilder
 from agent_builder.runtime import ClientReadyGate, TrackingFlowManager
+from catalog.availability import CLINIC_TZ, Calendar
+from catalog_voice import build_registry
 from tests.helpers import EXAMPLE
 
 
 class Call:
     """A FlowManager wired to a worker whose queued frames land in `timeline`."""
 
-    def __init__(self, config: dict = EXAMPLE):
-        self.builder = AgentBuilder.from_dict(copy.deepcopy(config))
+    def __init__(self, config: dict = EXAMPLE, registry=EMPTY_REGISTRY):
+        self.builder = AgentBuilder.from_dict(copy.deepcopy(config), registry)
         self.timeline: list = []  # queued frames and node_entered events, in order
         self.failures: list[Exception] = []
 
@@ -48,12 +53,22 @@ class Call:
             context_aggregator=LLMContextAggregatorPair(LLMContext()),
             worker=worker,
             on_node_entered=on_node_entered,
+            on_state_updated=on_node_entered,  # both land in the timeline, by type
             on_transition_failed=on_transition_failed,
         )
 
     @property
     def events(self) -> list[dict]:
-        return [e for e in self.timeline if isinstance(e, dict)]
+        return [e for e in self.timeline if isinstance(e, dict) and e["type"] == "node_entered"]
+
+    @property
+    def updates(self) -> list[dict]:
+        return [e for e in self.timeline if isinstance(e, dict) and e["type"] == "state_updated"]
+
+    @property
+    def tool_names(self) -> list[str]:
+        tools = [f for f in self.timeline if isinstance(f, LLMSetToolsFrame)][-1].tools
+        return [t.name for t in tools.standard_tools]
 
     async def start(self):
         await self.flow_manager.initialize(self.builder.build_initial_node())
@@ -248,3 +263,122 @@ async def test_gate_runs_after_delivery_callbacks_once_flushed():
     await rtvi.set_client_ready()  # a repeated handshake doesn't resend or re-run
     assert ended == [[("error", "boom")]]
     assert rtvi.sent == [("error", "boom")]
+
+
+# ---- node tools, guards and the scheduler --------------------------------------
+
+
+def scheduler_call() -> Call:
+    """The checked-in scheduler with a fixed clock and its own calendar."""
+    now = datetime(2026, 10, 19, 7, 0, tzinfo=CLINIC_TZ)
+    config = json.loads((Path(__file__).parent.parent / "agents" / "scheduler.json").read_text())
+    return Call(config, build_registry(calendar=Calendar(clock=lambda: now)))
+
+
+async def test_tool_calls_stay_in_the_node_and_report_state_changes():
+    call = scheduler_call()
+    await call.start()
+    await call.call_function("start_booking", {})
+    assert call.events[-1]["node"] == "find_service"
+
+    found = await call.call_function("search_services", {"query": "knee MRI"})
+    assert found["services"][0]["id"] == "appt_065"
+    assert call.updates == []  # a read-only tool changes nothing
+
+    result = await call.call_function("update_booking", {"service_id": "appt_065"})
+    assert result["draft"]["service"]["id"] == "appt_065"
+    assert [e["node"] for e in call.events] == ["greeting", "find_service"]  # no new path step
+    (update,) = call.updates
+    assert update["node"] == "find_service" and update["via"] == "update_booking"
+    assert update["state"]["booking"]["draft"]["service_id"] == "appt_065"
+    assert update["state"]["patient"] == {"is_new_patient": None, "has_referral": None}
+
+
+async def test_a_failed_guard_leaves_the_node_and_state_alone():
+    call = scheduler_call()
+    await call.start()
+    await call.call_function("start_booking", {})
+    await call.call_function("update_booking", {"service_id": "appt_065"})
+    await call.call_function("service_chosen", {})
+    assert call.flow_manager.current_node == "choose_provider_location"
+    state = copy.deepcopy(call.flow_manager.state)
+
+    result = await call.call_function("choices_complete", {})
+    assert result["status"] == "error" and result["guard"] == "booking_ready"
+    assert result["next_question"]["field"] == "has_referral"
+    assert call.flow_manager.current_node == "choose_provider_location"
+    assert call.flow_manager.state == state
+    assert call.events[-1]["node"] == "choose_provider_location"
+
+
+async def test_edges_cant_overwrite_tool_state():
+    call = scheduler_call()
+    await call.start()
+    await call.call_function("start_booking", {})
+    await call.call_function("update_booking", {"service_id": "appt_065"})
+    booking = copy.deepcopy(call.flow_manager.state["booking"])
+    await call.call_function("handoff_to_staff", {"reason": "wants a person", "booking": "forged"})
+    assert call.flow_manager.state["booking"] == booking
+    assert call.flow_manager.state["reason"] == "wants a person"
+
+
+async def test_scheduler_reaches_success_only_with_a_receipt():
+    call = scheduler_call()
+    await call.start()
+    await call.call_function("start_booking", {})
+    assert "update_booking" in call.tool_names and "book_appointment" not in call.tool_names
+    await call.call_function("update_booking", {"service_id": "appt_065"})
+    await call.call_function("service_chosen", {})
+    result = await call.call_function("update_booking", {"patient": {"has_referral": True, "is_new_patient": False}})
+    assert result["check"]["next_question"]["field"] == "provider_id"
+    await call.call_function("update_booking", {"provider_id": "prov_014", "location_id": "loc_004"})
+    await call.call_function("choices_complete", {})
+    assert call.flow_manager.current_node == "offer_times"
+
+    blocked = await call.call_function("time_selected", {})
+    assert blocked["guard"] == "slot_selected"
+    times = await call.call_function("get_availability", {})
+    picked = await call.call_function("update_booking", {"slot_id": times["slots"][1]["id"]})
+    await call.call_function("time_selected", {})
+    assert call.flow_manager.current_node == "confirm"
+    assert "book_appointment" in call.tool_names
+
+    early = await call.call_function("booking_done", {})
+    assert early["guard"] == "booking_completed"
+    assert call.flow_manager.current_node == "confirm"
+    revision = picked["draft"]["revision"]
+    receipt = await call.call_function("book_appointment", {"draft_revision": revision, "confirmed": True})
+    assert receipt["confirmation"].startswith("BK-")
+    await call.call_function("booking_done", {})
+
+    assert [e["node"] for e in call.events] == [
+        "greeting", "find_service", "choose_provider_location", "offer_times", "confirm", "success",
+    ]  # fmt: skip
+    assert call.events[-1]["state"]["booking"]["reservation"]["confirmation"] == receipt["confirmation"]
+    assert any(isinstance(f, EndFrame) for f in call.timeline)
+
+
+async def test_a_correction_at_confirm_invalidates_the_chosen_time():
+    call = scheduler_call()
+    await call.start()
+    await call.call_function("start_booking", {})
+    await call.call_function(
+        "update_booking",
+        {"service_id": "appt_065", "provider_id": "prov_014", "location_id": "loc_004",
+         "patient": {"has_referral": True, "is_new_patient": False}},
+    )  # fmt: skip
+    await call.call_function("service_chosen", {})
+    await call.call_function("choices_complete", {})
+    times = await call.call_function("get_availability", {})
+    picked = await call.call_function("update_booking", {"slot_id": times["slots"][0]["id"]})
+    await call.call_function("time_selected", {})
+
+    moved = await call.call_function("update_booking", {"provider_id": "prov_015", "location_id": "loc_005"})
+    assert "slot" not in moved["draft"]
+    stale = await call.call_function(
+        "book_appointment", {"draft_revision": picked["draft"]["revision"], "confirmed": True}
+    )
+    assert stale["error"]["code"] == "STALE_REVISION"
+    assert call.flow_manager.state["booking"]["reservation"] is None
+    await call.call_function("change_time", {})
+    assert call.flow_manager.current_node == "offer_times"

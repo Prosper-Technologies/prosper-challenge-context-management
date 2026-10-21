@@ -6,7 +6,8 @@
 # verbatim. The ONLY things we add are `edges`: transitions expressed as DATA (a string
 # `target`) rather than as Python closures — because a Copilot can emit a string, not
 # a callable — and an optional canvas position (`ui`). `AgentBuilder` turns the edge
-# strings back into the closures Pipecat wants.
+# strings back into the closures Pipecat wants. Likewise, node `tools` and edge
+# `guard`s are names the application's registry (registry.py) resolves.
 #
 # These models check document *shape* only (structural parsing). Whether the graph
 # can actually run — targets exist, names are unique, actions are supported — is
@@ -136,6 +137,9 @@ class Edge(_Model):
         default_factory=dict, description="Values to collect on this edge, as JSON-schema properties."
     )
     required: list[str] = Field(default_factory=list)
+    guard: Optional[str] = Field(
+        default=None, description="A named check that must pass before the edge is taken (see the registry)."
+    )
 
 
 class Node(_Model):
@@ -145,6 +149,7 @@ class Node(_Model):
     task_messages: list[Message] = Field(default_factory=list, description="This node's objectives.")
     role_message: Optional[str] = Field(default=None, description="Overrides the agent persona.")
     edges: list[Edge] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list, description="Registry tools the node exposes besides its edges.")
     pre_actions: list[AnyAction] = Field(default_factory=list)
     post_actions: list[AnyAction] = Field(default_factory=list)
     end: bool = Field(default=False, description="Terminal: the call ends after this node.")

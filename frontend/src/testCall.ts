@@ -22,6 +22,14 @@ export interface NodeEntered {
   state: Record<string, unknown>;
 }
 
+/** Sent when a tool changed the state while the node stayed active. Not a path step. */
+export interface StateUpdated {
+  type: "state_updated";
+  node: string | null;
+  via: string;
+  state: Record<string, unknown>;
+}
+
 export interface TranscriptEntry {
   role: "user" | "bot" | "function";
   text: string;
@@ -35,6 +43,7 @@ interface CallState {
   transcript: TranscriptEntry[];
   interim: string; // the user's in-progress (non-final) transcript
   path: NodeEntered[];
+  collected: Record<string, unknown>; // the latest state from either event
   spokenSegments: number[]; // bot-output segment ids already in the transcript
   micEnabled: boolean;
   userSpeaking: boolean;
@@ -51,6 +60,7 @@ type Action =
   | { type: "bot_stopped" }
   | { type: "function_call"; text: string }
   | { type: "node_entered"; event: NodeEntered }
+  | { type: "state_updated"; event: StateUpdated }
   | { type: "mic"; enabled: boolean }
   | { type: "user_speaking"; speaking: boolean };
 
@@ -61,6 +71,7 @@ const initialState: CallState = {
   transcript: [],
   interim: "",
   path: [],
+  collected: {},
   spokenSegments: [],
   micEnabled: true,
   userSpeaking: false,
@@ -128,7 +139,9 @@ function reducer(state: CallState, action: Action): CallState {
         ],
       };
     case "node_entered":
-      return { ...state, path: [...state.path, action.event] };
+      return { ...state, path: [...state.path, action.event], collected: action.event.state };
+    case "state_updated":
+      return { ...state, collected: action.event.state };
     case "mic":
       return { ...state, micEnabled: action.enabled };
     case "user_speaking":
@@ -187,6 +200,8 @@ export function useTestCall() {
           onServerMessage: guard((data) => {
             if (data?.type === "node_entered")
               dispatch({ type: "node_entered", event: data as NodeEntered });
+            else if (data?.type === "state_updated")
+              dispatch({ type: "state_updated", event: data as StateUpdated });
           }),
           onUserTranscript: guard((data) =>
             dispatch({ type: "user_transcript", text: data.text, final: data.final }),

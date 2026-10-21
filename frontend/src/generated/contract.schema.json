@@ -103,6 +103,18 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "guard": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A named check that must pass before the edge is taken (see the registry)."
         }
       },
       "required": [
@@ -277,6 +289,13 @@
         "edges": {
           "items": {
             "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "description": "Registry tools the node exposes besides its edges.",
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },

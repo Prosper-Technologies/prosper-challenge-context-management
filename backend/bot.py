@@ -11,7 +11,8 @@
 #
 # Each call picks its agent from the runner's per-call body, so the builder UI can
 # test an unsaved draft (or any saved agent) with no restart. Node activations are
-# streamed to the client as RTVI server messages (`node_entered`).
+# streamed to the client as RTVI server messages (`node_entered`), and so are state
+# changes made by the catalog tools within a node (`state_updated`).
 #
 # Run:  python bot.py   then open http://localhost:7860/client (prebuilt UI) or
 #       the builder frontend (frontend/, `npm run dev`)
@@ -112,6 +113,7 @@ async def run_bot(
         worker=worker,
         transport=transport,
         on_node_entered=rtvi_gate.send_server_message,
+        on_state_updated=rtvi_gate.send_server_message,
         on_transition_failed=on_transition_failed,
     )
 

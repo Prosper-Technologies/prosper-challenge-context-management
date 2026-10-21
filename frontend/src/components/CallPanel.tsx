@@ -119,7 +119,7 @@ export default function CallPanel({
       )}
 
       <PathTaken path={call.path} />
-      <CollectedState path={call.path} />
+      <CollectedState state={call.collected} />
       <Transcript call={call} />
     </aside>
   );
@@ -142,8 +142,8 @@ function PathTaken({ path }: { path: NodeEntered[] }) {
   );
 }
 
-function CollectedState({ path }: { path: NodeEntered[] }) {
-  const entries = Object.entries(path.at(-1)?.state ?? {});
+function CollectedState({ state }: { state: Record<string, unknown> }) {
+  const entries = Object.entries(state);
   if (entries.length === 0) return null;
   return (
     <div>

@@ -2,7 +2,7 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
-The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core; the tools, API, UI and benchmark (M6–M9) are still to come.
+The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent; the API, UI and benchmark (M7–M9) are still to come.
 
 ## Milestone 1: browser integration
 
@@ -256,7 +256,7 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 ## Phase 2: context-management design
 
-Status: M5 (the catalog domain) is implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M6–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
+Status: M5 (the catalog domain) and M6 (tools and builder integration) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M7–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
 
 ### Deterministic catalog rules, conversational interpretation
 
@@ -387,3 +387,60 @@ Errors are things a caller can ask for and never book: 8 unbookable types (ophth
 ### Not done in M5
 
 The tool registry, builder guards, `scheduler.json` (M6), the catalog API and contract types (M7), the UI (M8) and the live benchmark (M9). `make types` is unchanged because no API shape changed yet.
+
+## Milestone 6: tools and builder integration
+
+`catalog/tools.py` holds the eight tools and four guards. `agent_builder/registry.py` is the interface the builder sees, `catalog_voice.py` binds one to the other for calls, and `agents/scheduler.json` uses them. `example.json` is still the default agent.
+
+### One registry, structured errors
+
+Each tool is a name, a description, a Pydantic argument model, a result model and a handler taking a `ToolContext` (session, calendar, index). `Tool.run(ctx, raw_args)` returns JSON in every case: bad arguments, unknown IDs, rejected updates and booking failures come back as `{"error": {code, message, errors, violations, next_question, hint}}`, and the session is unchanged.
+
+- **Why:** the model can recover from an error it can read, while an exception would end the tool call. Voice, HTTP (M7) and evaluation (M9) call the same `run`, so validation and mutation rules can't drift between them.
+- The LLM schema comes from the argument model: `$ref`s inlined, titles and defaults dropped, `anyOf [X, null]` folded to `type: [X, "null"]`. Unknown arguments are rejected (`extra="forbid"`), but values aren't strict, because LLM JSON sometimes sends `"3"` for 3.
+- `update_booking` keeps the session's rule that an omitted field stays and an explicit null clears it. The exception is `patient: null`, which changes nothing; null on a single fact still clears that fact. Wiping every fact because the model wrote `null` for "nothing to say about the patient" seemed the likelier mistake.
+
+### Compact results, measured
+
+Results are projections, not catalog entities: cards with IDs and the fields that tell candidates apart, a booking view with names next to IDs, and option labels the model can read out ("MRI - Knee with Dr. Linda Ramirez (DO, Radiology) at Downtown Health Center"). Fields at their default (no hint, nothing excluded, not truncated) are left out of the JSON.
+
+- Searches return at most 5 cards with `total_matches`, `ambiguous`/`clarify`, `truncated`/`next_cursor`, `excluded` with reasons, and a one-line `hint`. Narrowing options and times are capped at 3. Truncated options say which search lists them all, and availability lists `other_days` to refine by.
+- `tests/test_tools.py` checks the serialized size of every result it produces against a 400-token budget (about 4 characters a token). The two overview pages are 184 and 112 tokens. The largest result is the first "Dr. Chen" page at about 380 tokens, because five namesakes with all their locations is what the caller has to choose between. Most results are 50–200.
+- A search with no query is a listing, so it isn't reported as ambiguous.
+- `find_locations` with a service applies the caller's known facts and keeps unknown ones as per-location `conditions`. A named location that can't work gets the policy's reason ("MRI - Knee needs imaging, which Richmond Care Center doesn't have") instead of the index's generic one.
+- **Tradeoff:** the projections repeat names that are already in earlier results, which costs some tokens per call, so the model never has to resolve an ID from memory.
+
+### Guards: data in the document, code in the registry
+
+`Edge.guard` names a check and `Node.tools` lists tools; both are plain strings in the document. The builder takes a `Registry` (tool bindings, guard bindings, and the state keys tools own) and knows nothing about scheduling. A tool handler returns `(result, None)`, so the node stays active. A guarded edge runs its check before it writes state or transitions, and a failure returns `{"status": "error", guard, message, next_question, violations}` and leaves the node active.
+
+- `service_chosen` was added to the plan's three guards. It stops the model from skipping to provider selection before the service is recorded.
+- **"The success terminal" in generic terms:** the validator can't tell which end node is "success". So a guard declares the tools it `completes` (`booking_completed` completes `book_appointment`). Any agent exposing such a tool must have an end node entered through that guard, and every edge into a node it guards must carry it. Removing the guard from `confirm → success`, or adding an unguarded shortcut into `success`, is an error. `handoff` needs no guard.
+- Tools own `state["patient"]` and `state["booking"]`. The edge handler drops those keys from collected arguments, and an edge property with one of those names gets a validation warning.
+- Without a registry, any tool or guard is unknown. The API validates and runs calls with the catalog registry, so `/validate` reports an unknown tool in a document the same way a call would.
+- **Tradeoff:** a guarded transition the model attempts too early costs a round trip. That's cheaper than a confirmation node the model can leave without booking.
+
+### The session in the flow state
+
+`catalog_voice.py` loads the `SchedulingSession` from `state["patient"]` and `state["booking"]` on each tool call, runs the shared handler and writes the session back only if it changed. A call's session ID is created the first time a tool changes something. Building the registry creates no calendar: the shared voice calendar is created on the first tool call, and a subprocess test checks that generating the contract doesn't create one.
+
+- A tool's handler runs synchronously between loading and saving the state, so parallel tool calls in one LLM turn can't interleave inside a mutation.
+- After a change, the builder calls `report_state(via)` on the flow manager. `TrackingFlowManager` sends `{type: "state_updated", node, via, state}`; a plain FlowManager has no such method and the call is skipped. The call panel's collected state follows both event types, and only `node_entered` adds a path step.
+
+### The scheduler agent
+
+The scheduler has seven nodes. `find_service` searches and records the service. `choose_provider_location` follows `next_question` through facts, provider and location. `offer_times` offers times and records the pick. `confirm` reads the booking back and books it. `success` and `handoff` are end nodes. Every nonterminal node after the greeting exposes `update_booking` and `check_booking`, so corrections work anywhere, and has back edges (`change_service`, `change_choices`, `change_time`) and an edge to `handoff`.
+
+- **Why only the tools a step needs:** `book_appointment` exists only in `confirm`, and searches aren't offered once a time is being chosen. A correction that needs a new search goes back to `choose_provider_location`. This keeps each node's tool schemas small and the booking step explicit.
+- **Tradeoff:** Pipecat Flows appends context across nodes, so the earlier tool results stay in the prompt. That's measured in M9, not mitigated here.
+
+### Testing
+
+- `test_tools.py`: schemas, caps and size, paging through all seven Chens, conditions and reasons from `find_locations`, searches leaving the session alone, null semantics, corrections, atomic invalid updates, availability refusal and refinement, confirmation, stale revisions, idempotent retries, a cross-session conflict, and each guard's pass/fail and recovery information.
+- `test_registry.py`: registry-aware validation (unknown, duplicate and clashing tools, unknown guards, the completion rule, reserved state keys), compilation, the catalog registry matching the tool definitions, and the scheduler validating with no issues.
+- `test_runtime.py` drives the scheduler through the real FlowManager path: tools stay in the node and send `state_updated` without a path step, a failed guard leaves the node and state untouched, edges can't overwrite tool state, `success` is reached only after `book_appointment` returned a receipt, and a correction at `confirm` makes the confirmed revision stale.
+- An API test checks that `/validate` resolves the scheduler's tools.
+
+### Not done in M6
+
+I haven't placed a voice call with the scheduler. The flow is tested through the real FlowManager with scripted tool calls, but how well gpt-4o follows the prompts and `next_question` is untested until a live call or M9's benchmark. The builder has no tool or guard controls yet (M8), and the HTTP tool API and its contract types are M7.
