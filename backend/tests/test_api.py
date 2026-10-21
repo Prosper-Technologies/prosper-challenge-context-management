@@ -34,7 +34,7 @@ def test_example_round_trips(client, store):
 
     response = client.put("/api/agents/example", json=original)
     assert response.status_code == 200
-    assert response.json() == {"issues": []}
+    assert response.json() == {"issues": [], "malformed": False}
     assert client.get("/api/agents/example").json() == EXAMPLE
     # The checked-in file is already in the store's format: saving changes nothing.
     assert (store.root / "example.json").read_text() == EXAMPLE_PATH.read_text()
@@ -75,7 +75,8 @@ def test_draft_with_graph_errors_saves_but_cannot_run(client, store):
                 "edge": None,
                 "message": "Initial node 'missing' is not a defined node.",
             }
-        ]
+        ],
+        "malformed": False,
     }
     assert client.get("/api/agents/wip").json() == doc
 
@@ -96,6 +97,7 @@ def test_malformed_document_is_rejected_and_leaves_the_file_intact(client, store
 
     response = client.put("/api/agents/example", json=body)
     assert response.status_code == 422
+    assert response.json()["malformed"] is True
     issues = response.json()["issues"]
     assert issues and all(i["level"] == "error" for i in issues)
     assert (store.root / "example.json").read_text() == before
@@ -163,6 +165,7 @@ def test_validate_reports_graph_issues_without_saving(client, store):
 
     assert response.status_code == 200
     assert [i["path"] for i in response.json()["issues"]] == [["initial_node"]]
+    assert response.json()["malformed"] is False
     assert sorted(p.name for p in store.root.iterdir()) == ["example.json"]
 
 
@@ -170,11 +173,12 @@ def test_validate_reports_structural_issues(client):
     response = client.post("/api/agents/validate", json={"name": "x", "initial_node": "a"})
 
     assert response.status_code == 200
+    assert response.json()["malformed"] is True
     assert response.json()["issues"][0]["path"] == ["nodes"]
 
 
 def test_validate_valid_agent(client):
-    assert client.post("/api/agents/validate", json=EXAMPLE).json() == {"issues": []}
+    assert client.post("/api/agents/validate", json=EXAMPLE).json() == {"issues": [], "malformed": False}
 
 
 def test_saved_file_is_formatted_json(client, store):

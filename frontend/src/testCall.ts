@@ -6,13 +6,10 @@
 // every exit path (hang-up, failed start, server disconnect) releases the mic and
 // connection so another call can start.
 
-import { PipecatClient, type RTVIMessage } from "@pipecat-ai/client-js";
+import { type APIRequest, PipecatClient, type RTVIMessage } from "@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import { useCallback, useEffect, useReducer, useRef } from "react";
-
-// A parsed agent document (JSON), sent as-is in the /start body.
-export type AgentSnapshot = { [key: string]: Serializable };
-type Serializable = string | number | boolean | null | Serializable[] | AgentSnapshot;
+import type { AgentConfig } from "./generated/contract";
 
 export type CallStatus = "idle" | "connecting" | "connected" | "disconnecting";
 
@@ -163,7 +160,7 @@ export function useTestCall() {
   }, []);
 
   const start = useCallback(
-    async (agent: AgentSnapshot) => {
+    async (agent: AgentConfig) => {
       if (clientRef.current) return;
       dispatch({ type: "start" });
 
@@ -215,7 +212,8 @@ export function useTestCall() {
       try {
         await client.startBotAndConnect({
           endpoint: "/start",
-          requestData: { body: { agent } },
+          // A parsed JSON document; its generated type just doesn't say so.
+          requestData: { body: { agent } } as APIRequest["requestData"],
         });
         if (clientRef.current === client) {
           dispatch({ type: "connected" });

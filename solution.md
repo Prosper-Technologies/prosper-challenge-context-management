@@ -1,6 +1,6 @@
 # Solution Overview
 
-Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path; M2 added the document contract and persistence.
+Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, and M3 built the graph editor.
 
 ## Milestone 1: browser integration
 
@@ -136,3 +136,68 @@ Pipecat is pinned to `==1.4.0`, because the runtime adapter depends on its inter
 ### Out of scope for M2
 
 The frontend is unchanged apart from the generated types. The M1 page still loads `/api/agents/example` through the new generic route. A UI for saved agents, save, the validation badge and the repair view all come with the M3 editor.
+
+## Milestone 3: graph editor
+
+### Pure document actions, one store
+
+Every edit is a pure function from one `AgentConfig` to the next (`editor/document.ts`). Each one copies only what it changes and returns the same object when nothing changes. A Zustand store holds the document, and zundo keeps undo history for the document only (`partialize` to `doc`, compared by reference).
+
+- **Why:** an undo step is exactly one action (a field commit, a rename with its reference updates, a whole drag, a delete). Selection, validation, view and call telemetry live in the same store but never create history or mark the document dirty.
+- Form edits replace only the fields they show. Message roles, extra fields, other actions and their order, and schema keywords such as `minimum` all survive. Tests pin each of these.
+- **Tradeoff:** actions address nodes and edges by index, which is simple and makes undoing a rename keep the selection. The cost is that a stale index would write to the wrong node, so the inspector is keyed by selection and every commit runs against the current document.
+
+### Selection by index, canvas ids by name
+
+The selection is `{node}` or `{node, edge}` by array index, the same addressing as issue paths, so clicking an issue selects its target directly. React Flow ids are names (`node`, `node::function`), so they stay stable across unrelated edits.
+
+- Documents whose node or function names collide can't have unique canvas ids. They open in the JSON view, which doubles as the repair view, until the names are unique. You can still save them, which matches the M2 rule that structurally valid drafts are saveable.
+- Dangling edges and self-loops are left off the canvas. The issue list and the node's transition list still reach them.
+
+### The canvas is a controlled view
+
+`toFlow(doc)` derives nodes and edges. Canvas events become document actions or transient state; nothing serializes the React Flow graph back.
+
+- In-progress drag positions and measured node sizes are local canvas state. The drop commits all dragged positions in one `moveNodes`, so a drag is one undo step, and validation ignores it (it keys on the document without `ui`).
+- **Tradeoff:** React Flow v12 needs `measured` sizes on controlled nodes, so the canvas keeps a size map. All flow nodes are rebuilt on each document change. That's fine at tens of nodes, and node cards read their own data through narrow store selectors.
+
+### Layout
+
+dagre lays out a document on open, or after a JSON apply, only for nodes without a `ui` position. If some nodes have positions, the new ones are placed below them. The laid-out document becomes the dirty baseline, so opening an agent never shows unsaved changes. New nodes go to the centre of the view. Tidy layout and the minimap are M4.
+
+### Field buffers
+
+Inspector fields edit a local buffer and commit it on blur or Enter (Escape reverts). A rejected commit, such as a conflicting rename or malformed JSON, keeps the text and shows the reason. Pending buffers register in `editor/buffers.ts`, and Save and Test call commit them all first and stop on any rejection.
+
+- **Why:** a keystroke is never an undo step, and nothing silently runs or saves an older document than the one on screen.
+- Uncommitted text counts as unsaved changes. Without that, an unapplied JSON edit on a clean document left Save disabled; the browser smoke test caught it.
+- **Tradeoff:** a rejected buffer is discarded if you select something else. The error was shown, and keeping per-item drafts across selection changes wasn't worth the complexity.
+
+### Raw JSON stays honest
+
+Raw editors (pre/post actions, an unsupported property schema, the whole document) check shape before committing. Actions only need to be objects with a string `type`; whether they can run is the validator's job. The whole-document view asks the backend, because only Pydantic knows the full shape.
+
+- That needed one backend change: `/validate` and `PUT` responses now carry `malformed`, so the client can tell shape errors (can't apply or save) from graph errors (fine to save, not to run). Types were regenerated.
+- The property table covers `string`/`number`/`integer`/`boolean`, a comma-separated enum, a description and required. Unions, arrays, objects, combinators and enum values that wouldn't round-trip through a comma list use the raw editor instead.
+
+### Test-call lock
+
+`startTestCall` commits buffers, locks the store, validates a deep-cloned snapshot and starts the call only if there are no errors. Any refusal releases the lock. Once the call starts, `useCallLock` releases it when the call status returns to idle, which covers hang-up, failure and server disconnect.
+
+- The store refuses `edit`, `replace`, undo and redo while locked, and the UI disables those controls. Selection, inspection and canvas navigation stay available.
+- Because the document is locked from snapshot to teardown, the canvas and the running call can't drift apart. The canvas highlights the active node and the traversed edges (`from::via`) from `node_entered`. The path stays visible after the call and resets when the next one starts.
+
+### Testing
+
+vitest covers the document actions and what they preserve, undo grouping, transient changes creating no history, the lock, dirty tracking, `toFlow` id stability, layout, stale or position-only validation, and the call-start lock path. These run in Node with no DOM. The components weren't unit-tested. They were checked in headless Chrome against the real backend:
+
+- a new 5-node agent built, connected and test-called before saving, with a live transcript and the start node highlighted
+- rename, drag and delete each undone in one step
+- repair and malformed-JSON refusal
+- unknown fields preserved through form edits and saving
+- conflicting-rename rejection blocking Save
+- a refused call releasing the lock
+
+### Out of scope for M3
+
+Keyboard shortcuts (Save, Undo/Redo), import/export, tidy layout, the minimap, `make dev` and the README walkthrough are M4.

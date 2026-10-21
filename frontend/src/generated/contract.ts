@@ -188,4 +188,5 @@ export interface Issue {
  */
 export interface IssuesResponse {
   issues: Issue[];
+  malformed: boolean;
 }

@@ -28,8 +28,9 @@ run: ## Run the voice agent + builder API (prebuilt client at http://localhost:7
 web: ## Run the builder frontend (http://localhost:5173; needs `make run`)
 	npm --prefix frontend run dev
 
-test: ## Run the backend tests
+test: ## Run the backend and frontend tests
 	cd backend && .venv/bin/python -m pytest -q
+	npm --prefix frontend test
 
 types: ## Regenerate the frontend's TypeScript types from the backend's JSON Schema
 	cd backend && .venv/bin/python -W ignore contract.py > ../$(GENERATED)/contract.schema.json

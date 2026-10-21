@@ -216,10 +216,14 @@
             "$ref": "#/$defs/Issue"
           },
           "type": "array"
+        },
+        "malformed": {
+          "type": "boolean"
         }
       },
       "required": [
-        "issues"
+        "issues",
+        "malformed"
       ],
       "title": "IssuesResponse",
       "type": "object"

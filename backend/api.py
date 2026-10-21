@@ -5,9 +5,9 @@
 #
 #   GET    /api/agents            saved agents: [{id, name}]
 #   GET    /api/agents/{id}       one saved agent document, as written
-#   PUT    /api/agents/{id}       create or replace; -> {issues}
+#   PUT    /api/agents/{id}       create or replace; -> {issues, malformed}
 #   DELETE /api/agents/{id}
-#   POST   /api/agents/validate   -> {issues} for a document, without saving it
+#   POST   /api/agents/validate   -> {issues, malformed} for a document, without saving it
 #   POST   /start                 (runner route) preflighted here: an invalid agent
 #                                 selection is rejected with 422 before any WebRTC setup
 #
@@ -43,6 +43,9 @@ class AgentSummary(BaseModel):
 
 class IssuesResponse(BaseModel):
     issues: list[Issue]
+    # The document isn't structurally an agent: `issues` are shape errors, and it
+    # can't be saved. Otherwise any errors are graph errors (saveable, not runnable).
+    malformed: bool
 
 
 # ---- storage ---------------------------------------------------------------------
@@ -165,9 +168,12 @@ def select_agent(body: Optional[dict], agents: Optional[AgentStore] = None) -> A
 # ---- routes --------------------------------------------------------------------------
 
 
-def _issues_response(issues: list[Issue], status_code: int = 200) -> JSONResponse:
+def _issues_response(
+    issues: list[Issue], malformed: bool = False, status_code: int = 200
+) -> JSONResponse:
     return JSONResponse(
-        IssuesResponse(issues=issues).model_dump(mode="json"), status_code=status_code
+        IssuesResponse(issues=issues, malformed=malformed).model_dump(mode="json"),
+        status_code=status_code,
     )
 
 
@@ -194,7 +200,10 @@ def build_router(agents: AgentStore) -> APIRouter:
     # Declared before /{agent_id}, which would otherwise match it.
     @router.post("/validate", response_model=IssuesResponse)
     async def validate_agent(request: Request):
-        return _issues_response(validate(await _json_body(request)))
+        config, issues = parse(await _json_body(request))
+        if config is None:
+            return _issues_response(issues, malformed=True)
+        return _issues_response(validate(config))
 
     @router.get("/{agent_id}")
     async def get_agent(agent_id: str) -> Any:
@@ -211,7 +220,7 @@ def build_router(agents: AgentStore) -> APIRouter:
         path_for(agent_id)
         config, issues = parse(await _json_body(request))
         if config is None:
-            return _issues_response(issues, status_code=422)
+            return _issues_response(issues, malformed=True, status_code=422)
         agents.save(agent_id, config)
         return _issues_response(validate(config))
 
