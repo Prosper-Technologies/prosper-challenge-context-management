@@ -2,6 +2,8 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
+The [Phase 2 section](#phase-2-context-management-design) records proposed context-management decisions and their rationale. It is a design, not an implementation or benchmark report.
+
 ## Milestone 1: browser integration
 
 ### One process for the API and the calls
@@ -251,3 +253,70 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 - I didn't place a real voice call in M4, because none of the call code changed. The M3 browser checks covered the call itself.
 - Stretch goals (node templates, a custom edge for parallel edges and self-loops, call history, a catalog demo agent) are not done.
+
+## Phase 2: context-management design
+
+Status: proposed. [M5–M9 in PLAN.md](PLAN.md#phase-2-context-management-plan) define the implementation and verification work. No Phase 2 performance or accuracy results have been measured yet.
+
+### Deterministic catalog rules, conversational interpretation
+
+The tools-based scheduler will receive small catalog projections through tools. Code will enforce provider/service/location relationships, referral requirements and new-patient eligibility before reserving a time. The naive evaluation baseline will receive the full catalog.
+
+- **Why:** the catalog contains duplicate names, confusable services and misleading specialty labels. Provider eligibility comes from explicit appointment-type IDs and location capabilities; comparing specialty strings would reject valid combinations. The model should resolve what the caller means while code checks what can actually be booked.
+- **Tradeoff:** a policy-valid booking can still be the wrong appointment for the caller. Guardrails do not establish correct interpretation, so evaluation must check intent separately from policy violations.
+- **Data check:** the catalog has 760 valid static service/provider/location triples. Each Radiology imaging type has two provider/location pairs, but Echocardiogram has four. These pairs are not calendar availability, and the plan now distinguishes them.
+
+### One typed session and explicit corrections
+
+`PatientFacts` will represent new-patient and referral status as true, false or unknown. A `SchedulingSession` will hold those facts, the booking draft, its revision, offered slots and any completed reservation. A dedicated update operation will collect choices and handle corrections; searches will not implicitly select their first result.
+
+- **Why:** an empty state currently contains no patient facts. Treating a missing boolean as false could classify an unknown caller as an existing patient. Corrections also need consequences: changing a service may invalidate a provider, and changing a provider or location invalidates previously offered times and confirmation.
+- **Tradeoff:** explicit invalidation adds state transitions and tests. It preserves compatible choices so a small correction does not restart the entire conversation, while keeping completed reservations separate from a mutable draft. Cancellation and rescheduling remain outside this phase.
+- The voice adapter will serialize the session into `flow_manager.state`; it lasts for the call, not across restarts. A session-state event will update the browser after non-transition tools, because the existing `node_entered` event only reports state when a node activates.
+- Patient facts are simulated caller-provided values. This design does not verify referral records or connect to a patient database.
+
+### Guard progress and reserve only after confirmation
+
+The current generic edge handler copies arguments into state and transitions unconditionally. The scheduler will use named guards for booking readiness, slot selection and completion, supplied to the builder through a small registry. A failed guard will return recovery information without leaving the node or modifying state.
+
+- **Why:** exposing a booking tool does not guarantee the model calls it. A separate, nonterminal confirmation node and a guarded success terminal prevent a transition from being mistaken for a successful reservation. Booking requires the current draft revision and explicit caller confirmation; a receipt is the evidence of completion.
+- **Tradeoff:** this extends the document contract with optional edge guards and requires registry-aware validation. Existing agents without guards keep their behavior. The generic compiler remains unaware of catalog rules; scheduler policy lives in the injected handlers.
+
+### Small results must still expose every valid candidate
+
+Search will use lexical ranking and curated aliases, deterministic tie-breaking, and a minimum match score. Ambiguity will be calculated before truncating results. Responses will include match counts, truncation metadata and refinement or continuation information.
+
+- **Why:** seven providers match "Dr. Chen", so a five-item response without continuation can make the intended person unreachable. A fuzzy matcher also always has a best result unless a threshold allows it to say there is no match. Explicit filters should narrow the full candidate set before the response cap applies.
+- **Tradeoff:** metadata and follow-up searches cost some tokens and turns. They preserve recall while keeping individual responses small. Provider and service specialty filters stay distinct, and a named but infeasible provider is explained rather than silently replaced.
+
+### A small domain core shared by three adapters
+
+Matching and policy will be pure Python domain code. One registry will describe tool names, argument/result models and handlers accepting a scheduling session. Voice, HTTP and evaluation adapters will call those same handlers; schemas and playground fields will be derived from the same definitions.
+
+- **Why:** otherwise each entry point can acquire different validation, defaults or mutation behavior. The builder should compile tools without importing scheduling-specific policy, and contract generation should not initialize calendars or voice services.
+- **Tradeoff:** registry injection and adapters add a small amount of plumbing. Keep the boundary limited to tool execution and transition guards; a general plugin framework is unnecessary for this phase.
+- Cache the immutable catalog, normalized names, aliases, ID maps and 760 static triples. Direct filtering is sufficient at this size; complex indexes or embeddings need evidence of a matching or latency problem. Session facts and mutable reservations must never share this cache.
+
+### Calendar intervals and isolated playgrounds
+
+The mock calendar will use a stable seed, injected clock and clinic timezone. Reservations will occupy provider time intervals across services and locations. Availability revalidation and reservation will be atomic within the server process, with retries keyed to the session and confirmed draft revision.
+
+- **Why:** deleting one slot ID does not block an overlapping slot for a different service duration or at another clinic. Two calls may also select the same offered time, so availability is only a proposal until reservation succeeds. Idempotency lets a repeated booking call return the original receipt.
+- **Tradeoff:** interval checks and a small critical section are more work than removing an ID from a list. Storage remains in memory and single-process; restart persistence, distributed locking and real provider calendars are outside scope.
+- The playground will have explicit server-side sandbox sessions with private calendars, Reset and inactivity expiry. Voice calls will share their own calendar; each evaluation run will start with a fresh equivalent calendar. This lets the playground exercise real mutations without consuming voice availability, and prevents one benchmark run from changing the next run's outcome.
+
+### Refactor the UI at its actual reuse points
+
+The catalog screen will reuse issue-list presentation through an issue-click callback. Editor navigation will remain in an editor wrapper, because the current `IssueList` maps every issue to an agent selection. The application shell will continue to own calls and audio above the screen switch.
+
+- **Why:** catalog paths need catalog navigation, and switching screens must not tear down a call or lose invalid local field buffers. Editor keyboard shortcuts must not change a hidden document while the user works in the playground.
+- **Tradeoff:** retaining the editor subtree or blocking navigation on an uncommittable buffer requires deliberate lifecycle handling. Prefer local screen state until a shared store is useful; there is no need to move catalog browsing into document history.
+
+### Measure whole conversations and compare equivalent systems
+
+Scenario fixtures and deterministic outcome checks will be established with the domain implementation, before the catalog UI. Both evaluation modes will use the same scheduler settings, caller facts, patient-state mutations, booking validator, simulated date and initial availability. Catalog access will be the comparison variable.
+
+- **Why:** identical guardrails can make actual policy violations zero in both modes, while matching quality remains very different. Report invalid attempts, guardrail rejections, completed reservations and correctness against caller intent separately. A spoken confirmation without a corresponding valid reservation is not success.
+- **Tradeoff:** a live caller simulator introduces variation even with fixed scenarios. Run three repetitions, retain traces and version/configuration metadata, and use deterministic checks on the resulting state instead of asking the simulator to judge its own conversation. Report simulator usage separately so it does not obscure scheduler cost.
+- Measure total input/output/cached tokens where supplied, tool calls, prompt growth, turns and latency. Clearly label playground token counts as estimates and record the pricing assumptions behind evaluation cost estimates.
+- The installed FlowManager defaults to appending context. Replacing the tools exposed at each node does not remove earlier tool results or instructions. Repeated searches and late corrections must therefore be included in the benchmark. If accumulated context materially increases cost or latency, compare a deterministic state summary at node boundaries while preserving unresolved preferences and recent caller context. Adopt resets only after checking outcome correctness; adding an LLM summarization call has its own latency and information-loss costs.
