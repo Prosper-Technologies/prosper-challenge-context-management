@@ -6,12 +6,12 @@
 # definition (JSON) via AgentBuilder and runs it. Swapping the agent is a data
 # change (edit/replace the JSON), not a code change.
 #
-#   /start body.agent (inline draft) | example_flow.json
+#   /start body.agent (inline draft) | body.agent_id (saved, agents/) | agents/example.json
 #       ->  AgentBuilder  ->  Pipecat Flows graph  ->  TrackingFlowManager
 #
 # Each call picks its agent from the runner's per-call body, so the builder UI can
-# test an unsaved draft with no restart. Node activations are streamed to the
-# client as RTVI server messages (`node_entered`).
+# test an unsaved draft (or any saved agent) with no restart. Node activations are
+# streamed to the client as RTVI server messages (`node_entered`).
 #
 # Run:  python bot.py   then open http://localhost:7860/client (prebuilt UI) or
 #       the builder frontend (frontend/, `npm run dev`)

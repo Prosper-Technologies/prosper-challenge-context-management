@@ -21,11 +21,17 @@
           "properties": {
             "intent": {
               "type": "string",
-              "enum": ["book", "reschedule", "cancel"],
-              "description": "What the caller wants to do."
+              "description": "What the caller wants to do.",
+              "enum": [
+                "book",
+                "reschedule",
+                "cancel"
+              ]
             }
           },
-          "required": ["intent"]
+          "required": [
+            "intent"
+          ]
         }
       ]
     },
@@ -43,10 +49,19 @@
           "description": "Record the caller's name and reason once both are known.",
           "target": "offer_times",
           "properties": {
-            "full_name": {"type": "string", "description": "Caller's full name."},
-            "reason": {"type": "string", "description": "Reason for the visit."}
+            "full_name": {
+              "type": "string",
+              "description": "Caller's full name."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Reason for the visit."
+            }
           },
-          "required": ["full_name", "reason"]
+          "required": [
+            "full_name",
+            "reason"
+          ]
         }
       ]
     },
@@ -66,11 +81,16 @@
           "properties": {
             "slot": {
               "type": "string",
-              "enum": ["Tuesday 10 AM", "Thursday 2 PM"],
-              "description": "The chosen appointment slot."
+              "description": "The chosen appointment slot.",
+              "enum": [
+                "Tuesday 10 AM",
+                "Thursday 2 PM"
+              ]
             }
           },
-          "required": ["slot"]
+          "required": [
+            "slot"
+          ]
         }
       ]
     },

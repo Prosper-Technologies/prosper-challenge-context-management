@@ -2,8 +2,6 @@
 transition path with fake LLM/transport plumbing (no network)."""
 
 import copy
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,8 +15,7 @@ from pipecat_flows import FlowInitializationError
 
 from agent_builder import AgentBuilder
 from agent_builder.runtime import ClientReadyGate, TrackingFlowManager
-
-EXAMPLE = json.loads((Path(__file__).parent.parent / "example_flow.json").read_text())
+from tests.helpers import EXAMPLE
 
 
 class Call:

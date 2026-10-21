@@ -2,7 +2,7 @@
 # AgentBuilder — loads a declarative agent (JSON / dict) and compiles its node
 # graph into Pipecat Flows objects.
 #
-#   JSON  ->  AgentConfig (validated)  ->  Pipecat Flows NodeConfig graph
+#   JSON  ->  AgentConfig (parsed + validated)  ->  Pipecat Flows NodeConfig graph
 #
 # This is the seam between "agent as data" (what the Phase 2 Copilot produces)
 # and "agent as a running conversation" (what bot.py executes). Keeping the
@@ -17,42 +17,37 @@ from loguru import logger
 from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 
 from .schema import AgentConfig, Edge, Node
+from .validation import AgentValidationError, has_errors, parse, validate
 
 
 class AgentBuilder:
-    """Builds a runnable Pipecat Flows graph from a declarative AgentConfig."""
+    """Builds a runnable Pipecat Flows graph from a declarative AgentConfig.
+
+    Raises AgentValidationError if the agent can't run (any validation error).
+    Warnings are logged, not raised.
+    """
 
     def __init__(self, config: AgentConfig):
+        issues = validate(config)
+        if has_errors(issues):
+            raise AgentValidationError(issues)
+        for issue in issues:
+            logger.warning(f"Agent '{config.name}': {issue.message} (at {issue.path})")
         self.config = config
         self._nodes_by_name = {n.name: n for n in config.nodes}
-        self._validate()
 
     # ---- loading -----------------------------------------------------------
     @classmethod
     def from_dict(cls, data: dict) -> "AgentBuilder":
-        return cls(AgentConfig.from_dict(data))
+        config, issues = parse(data)
+        if config is None:
+            raise AgentValidationError(issues)
+        return cls(config)
 
     @classmethod
     def from_json(cls, path: Union[str, Path]) -> "AgentBuilder":
         data = json.loads(Path(path).read_text())
         return cls.from_dict(data)
-
-    # ---- validation --------------------------------------------------------
-    def _validate(self) -> None:
-        names = set(self._nodes_by_name)
-        if not names:
-            raise ValueError("Agent has no nodes.")
-        if self.config.initial_node not in names:
-            raise ValueError(
-                f"initial_node '{self.config.initial_node}' is not a defined node."
-            )
-        for node in self.config.nodes:
-            for edge in node.edges:
-                if edge.target not in names:
-                    raise ValueError(
-                        f"Edge '{edge.function}' in node '{node.name}' targets "
-                        f"unknown node '{edge.target}'."
-                    )
 
     # ---- compilation -------------------------------------------------------
     def build_initial_node(self) -> NodeConfig:
@@ -60,19 +55,23 @@ class AgentBuilder:
         return self._make_node(self._nodes_by_name[self.config.initial_node])
 
     def _make_node(self, node: Node) -> NodeConfig:
+        # Everything handed to Pipecat is a fresh dict, so compiling never mutates
+        # the config and repeated compilation gives the same result.
         node_config: NodeConfig = {
             "name": node.name,
             "role_message": node.role_message or self.config.persona,
-            "task_messages": node.task_messages,
+            "task_messages": [m.to_dict() for m in node.task_messages],
             "functions": [self._make_edge_function(edge) for edge in node.edges],
         }
         if node.pre_actions:
-            node_config["pre_actions"] = node.pre_actions
-        # Explicit post_actions win; otherwise a terminal node ends the call.
-        if node.post_actions:
-            node_config["post_actions"] = node.post_actions
-        elif node.end:
-            node_config["post_actions"] = [{"type": "end_conversation"}]
+            node_config["pre_actions"] = [a.to_dict() for a in node.pre_actions]
+        post_actions = [a.to_dict() for a in node.post_actions]
+        # A terminal node ends the call after its own post-actions, unless one of
+        # them already does.
+        if node.end and not any(a["type"] == "end_conversation" for a in post_actions):
+            post_actions.append({"type": "end_conversation"})
+        if post_actions:
+            node_config["post_actions"] = post_actions
         return node_config
 
     def _make_edge_function(self, edge: Edge) -> FlowsFunctionSchema:
@@ -86,7 +85,7 @@ class AgentBuilder:
         return FlowsFunctionSchema(
             name=edge.function,
             description=edge.description,
-            properties=edge.properties,
-            required=edge.required,
+            properties={k: p.to_dict() for k, p in edge.properties.items()},
+            required=list(edge.required),
             handler=handler,
         )

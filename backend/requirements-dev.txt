@@ -1,4 +1,5 @@
-# Test-only dependencies (installed by `make install`).
+# Test-only dependencies. `make lock` resolves these (with requirements.txt) into
+# requirements-dev.lock, which `make install` installs.
 -r requirements.txt
 pytest>=9.1,<10
 pytest-asyncio>=1.4,<2

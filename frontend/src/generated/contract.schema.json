@@ -1,0 +1,434 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": true,
+      "description": "Any other action. Preserved, but validation reports it: Pipecat only runs\nactions with a registered handler, and a JSON document can't carry one.",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "AgentConfig": {
+      "additionalProperties": true,
+      "description": "A complete agent: identity + the conversation graph.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "voice_id": {
+          "default": "21m00Tcm4TlvDq8ikWAM",
+          "type": "string"
+        },
+        "model": {
+          "default": "gpt-4o",
+          "type": "string"
+        },
+        "persona": {
+          "default": "",
+          "description": "Global role message, applied to every node.",
+          "type": "string"
+        },
+        "initial_node": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "initial_node",
+        "nodes"
+      ],
+      "title": "AgentConfig",
+      "type": "object"
+    },
+    "AgentSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "AgentSummary",
+      "type": "object"
+    },
+    "Edge": {
+      "additionalProperties": true,
+      "description": "A transition out of a node, exposed to the LLM as a callable tool.",
+      "properties": {
+        "function": {
+          "description": "Tool name the LLM calls to take this edge.",
+          "type": "string"
+        },
+        "description": {
+          "description": "When the model should call it.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Name of the node to transition to.",
+          "type": "string"
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertySchema"
+          },
+          "description": "Values to collect on this edge, as JSON-schema properties."
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "function",
+        "description",
+        "target"
+      ],
+      "title": "Edge",
+      "type": "object"
+    },
+    "EndConversationAction": {
+      "additionalProperties": true,
+      "description": "End the call, optionally saying `text` first (Pipecat's built-in `end_conversation`).",
+      "properties": {
+        "type": {
+          "const": "end_conversation",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "append_text_to_context": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "EndConversationAction",
+      "type": "object"
+    },
+    "Issue": {
+      "description": "One problem with an agent document.",
+      "properties": {
+        "level": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "node": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "edge": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "path",
+        "node",
+        "edge",
+        "message"
+      ],
+      "title": "Issue",
+      "type": "object"
+    },
+    "IssuesResponse": {
+      "properties": {
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/Issue"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "issues"
+      ],
+      "title": "IssuesResponse",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "Message": {
+      "additionalProperties": true,
+      "description": "An LLM message, passed to Pipecat verbatim (any additional fields included).",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "Node": {
+      "additionalProperties": true,
+      "description": "A single conversational state. Fields mirror Pipecat Flows' NodeConfig.",
+      "properties": {
+        "name": {
+          "description": "Unique within the agent; edges target nodes by name.",
+          "type": "string"
+        },
+        "task_messages": {
+          "description": "This node's objectives.",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "role_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Overrides the agent persona."
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "pre_actions": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TtsSayAction"
+              },
+              {
+                "$ref": "#/$defs/EndConversationAction"
+              },
+              {
+                "$ref": "#/$defs/Action"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "post_actions": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TtsSayAction"
+              },
+              {
+                "$ref": "#/$defs/EndConversationAction"
+              },
+              {
+                "$ref": "#/$defs/Action"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "end": {
+          "default": false,
+          "description": "Terminal: the call ends after this node.",
+          "type": "boolean"
+        },
+        "ui": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Node",
+      "type": "object"
+    },
+    "Position": {
+      "additionalProperties": true,
+      "description": "A node's canvas position. The compiler ignores it.",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "PropertySchema": {
+      "additionalProperties": true,
+      "description": "A JSON-schema property for a value an edge collects.\n\nOnly the keywords the builder's forms edit are declared; any other keyword\n(`items`, `minimum`, ...) is preserved and passed to the LLM unchanged.",
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "enum": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "PropertySchema",
+      "type": "object"
+    },
+    "TtsSayAction": {
+      "additionalProperties": true,
+      "description": "Speak `text` (Pipecat's built-in `tts_say`).",
+      "properties": {
+        "type": {
+          "const": "tts_say",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "append_text_to_context": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "TtsSayAction",
+      "type": "object"
+    }
+  },
+  "title": "AgentBuilderContract"
+}
