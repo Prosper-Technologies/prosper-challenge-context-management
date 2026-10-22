@@ -4,6 +4,7 @@
 #
 #   Node.tools  ["update_booking", ...]   functions the node exposes besides its edges
 #   Edge.guard  "booking_ready"           a check that must pass before the edge runs
+#   Node.enter_tools ["get_availability"] tools run, without arguments, on entry
 #
 # The builder and validator only see names, schemas and callables here. What a tool
 # does (e.g. the clinic scheduling tools, bound in catalog_voice.py) stays outside the
@@ -19,8 +20,9 @@ from typing import Optional
 
 # (arguments, flow state) -> (JSON result, whether the state changed). May mutate state.
 ToolRun = Callable[[dict, dict], tuple[dict, bool]]
-# flow state -> None if the edge may be taken, else recovery information for the LLM.
-GuardCheck = Callable[[dict], Optional[dict]]
+# (flow state, the edge's arguments) -> None if the edge may be taken, else recovery
+# information for the LLM. An automatic edge (Edge.auto_after) is checked with no arguments.
+GuardCheck = Callable[[dict, dict], Optional[dict]]
 
 
 @dataclass(frozen=True)

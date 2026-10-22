@@ -48,28 +48,32 @@ def last_result(messages: list[dict], name_hint: str = "") -> dict:
 
 
 def flu_shot_booking(slot_index: int = 0) -> list[Step]:
-    """The scheduler's side of booking a flu shot with Dr. Lucas Chen at Mission Bay."""
+    """The scheduler's side of booking a flu shot with Dr. Lucas Chen at Mission Bay.
+    The first message greets without a model call, and code takes every transition:
+    the ready draft moves to offer_times with its times, the recorded pick to
+    confirm, and the booking to success."""
     return [
-        "Hi, this is the clinic's scheduling assistant. How can I help?",
-        [("start_booking", {})],
         [("search_services", {"query": "flu shot"})],
         [("update_booking", {"service_id": "appt_011", "patient": {"is_new_patient": False}})],
         [("update_booking", {"provider_id": "prov_047", "location_id": "loc_000"})],
-        [("choices_complete", {})],
-        [("get_availability", {})],
         "I have Monday at eight, eight ten or eight twenty. Which works?",
         lambda m: [("update_booking", {"slot_id": slot_from(m, slot_index)})],
-        [("time_selected", {})],
         "A flu shot with Dr. Lucas Chen at Mission Bay on Monday at eight. Shall I book it?",
         lambda m: [("book_appointment", {"draft_revision": last_draft_revision(m), "confirmed": True})],
-        [("booking_done", {})],
         "You're booked. Goodbye!",
     ]
 
 
+def offered_slots(result: dict):
+    """The times in a get_availability result, also when entering offer_times ran it."""
+    if "slots" in result:
+        return result["slots"]
+    return result.get("auto_transition", result).get("get_availability", {}).get("slots")
+
+
 def slot_from(messages: list[dict], index: int) -> str:
-    offers = [json.loads(m["content"]) for m in messages if m["role"] == "tool" and '"slots"' in m["content"]]
-    return offers[-1]["slots"][index]["id"]
+    offers = [offered_slots(json.loads(m["content"])) for m in messages if m["role"] == "tool"]
+    return [o for o in offers if o is not None][-1][index]["id"]
 
 
 def last_draft_revision(messages: list[dict]) -> int:
@@ -89,19 +93,22 @@ async def test_tools_run_books_through_the_real_graph():
 
     assert record["ok"], record["why"]
     assert record["ended_by"] == "agent"
-    assert record["path"] == ["greeting", "choose_appointment", "offer_times", "confirm", "success"]
+    assert record["path"] == ["choose_appointment", "offer_times", "confirm", "success"]
     assert record["booking"]["provider_id"] == "prov_047"
-    assert record["transitions"] == 4
+    assert record["transitions"] == record["auto_transitions"] == 3
     assert record["policy_violations"] == [] and record["fact_errors"] == []
     assert record["tool_errors"] == 0 and record["guard_rejections"] == 0
-    assert record["state_updates"] == 5  # update_booking ×4 and book_appointment; searches change nothing
-    assert record["tool_calls"]["update_booking"] == 3
+    # update_booking ×3, get_availability on entering offer_times, book_appointment;
+    # searches change nothing.
+    assert record["state_updates"] == 5
+    assert record["tool_calls"] == {"search_services": 1, "update_booking": 3, "book_appointment": 1}
     # Usage and latency come from the provider replies.
-    assert record["llm_calls"] == len(scheduler.requests) == 14
+    assert record["llm_calls"] == len(scheduler.requests) == 8
     assert record["usage"]["input"] == sum(record["prompt_tokens"])
-    assert record["usage"]["cached"] == 50 * 14
+    assert record["usage"]["cached"] == 50 * 8
     assert record["models"] == {"scheduler": ["gpt-4o-test"], "caller": ["gpt-4o-mini-test"]}
-    # The opening line is the scenario's, not a model call.
+    # The agent's first message and the caller's opening line are fixed, not model calls.
+    assert record["trace"]["transcript"][0] == {"role": "assistant", "text": SCHEDULER["first_message"]}
     assert record["trace"]["transcript"][1] == {"role": "caller", "text": scenario.caller.opening}
     assert record["caller_calls"] == 2
     assert record["turns"] == 3
@@ -112,15 +119,46 @@ async def test_context_appends_and_tools_follow_the_node():
     await converse(SCENARIOS["stale_confirmation"], "tools", SCHEDULER, SETTINGS, scheduler, Script(CALLER_LINES[2:]))
 
     first, later = scheduler.requests[0], scheduler.requests[-1]
+    assert [m["role"] for m in first["messages"]] == ["system", "developer", "assistant", "user"]
     assert first["messages"][0] == {"role": "system", "content": SCHEDULER["persona"]}
+    assert first["messages"][2]["content"] == SCHEDULER["first_message"]  # in the context, as said
     # Every earlier message is still in the last prompt (APPEND strategy).
     assert later["messages"][: len(first["messages"])] == first["messages"]
     tasks = [m["content"] for m in later["messages"] if m["role"] == "developer"]
-    assert len(tasks) == 5  # one per node entered
+    assert len(tasks) == 4  # one per node entered
     names = lambda r: {t["function"]["name"] for t in r["tools"] or []}  # noqa: E731
     assert "book_appointment" not in names(scheduler.requests[2])
-    assert "book_appointment" in names(scheduler.requests[11])
+    assert "book_appointment" in names(scheduler.requests[6])
     assert later["tools"] is None  # the success node has no functions
+
+
+async def test_combined_request_books_with_two_fewer_model_rounds():
+    steps = [[("apply_request", {
+        "service_text": "flu shot", "provider_text": "Lucas Chen", "location_text": "Mission Bay",
+        "patient": {"is_new_patient": False},
+    })], *flu_shot_booking()[3:]]
+    scheduler = Script(steps)
+    record = await converse(SCENARIOS["stale_confirmation"], "tools", SCHEDULER, SETTINGS,
+                            scheduler, Script(CALLER_LINES[2:]))
+    assert record["ok"], record["why"]
+    assert record["llm_calls"] == 6
+    assert record["tool_calls"] == {"apply_request": 1, "update_booking": 1, "book_appointment": 1}
+    assert record["auto_transitions"] == 3
+    assert record["tool_errors"] == record["guard_rejections"] == 0
+    result = json.loads(scheduler.requests[1]["messages"][-2]["content"])
+    assert result["draft"]["revision"] == 1
+    assert result["auto_transition"]["get_availability"]["slots"]
+
+
+async def test_request_clarification_does_not_transition_or_count_as_a_tool_error():
+    scheduler = Script([
+        [("apply_request", {"service_text": "flu shot", "provider_text": "Chen", "location_text": "Mission Bay"})],
+        "Which Dr. Chen do you mean?",
+    ])
+    record = await converse(SCENARIOS["stale_confirmation"], "tools", SCHEDULER, SETTINGS,
+                            scheduler, Script([f"Never mind. {END}"]))
+    assert record["path"] == ["choose_appointment"]
+    assert record["state_updates"] == record["tool_errors"] == record["auto_transitions"] == 0
 
 
 async def test_naive_mode_has_the_catalog_and_no_search_tools():
@@ -130,7 +168,11 @@ async def test_naive_mode_has_the_catalog_and_no_search_tools():
     for node, original in zip(agent["nodes"], SCHEDULER["nodes"]):
         assert not SEARCH_TOOLS & set(node.get("tools", []))
         assert set(node.get("tools", [])) == set(original.get("tools", [])) - SEARCH_TOOLS
-        assert node["edges" if "edges" in node else "name"] == original["edges" if "edges" in original else "name"]
+        for actual, expected in zip(node.get("edges", []), original.get("edges", [])):
+            assert {k: v for k, v in actual.items() if k != "auto_after"} == {
+                k: v for k, v in expected.items() if k != "auto_after"
+            }
+            assert actual.get("auto_after", []) == [t for t in expected.get("auto_after", []) if t not in SEARCH_TOOLS]
     assert mode_agent("tools", SCHEDULER) == SCHEDULER
     AgentBuilder.from_dict(agent, build_registry())  # still a valid agent
 
@@ -143,7 +185,7 @@ async def test_naive_mode_has_the_catalog_and_no_search_tools():
 
 
 async def test_a_search_tool_isnt_available_in_naive_mode():
-    scheduler = Script(flu_shot_booking()[:3] + ["Sorry."])
+    scheduler = Script(flu_shot_booking()[:1] + ["Sorry."])
     record = await converse(SCENARIOS["stale_confirmation"], "naive", SCHEDULER, SETTINGS, scheduler, Script([f"Bye {END}"]))
     assert record["unknown_calls"] == 1  # not in this mode's node, so not a tool error
     assert record["tool_errors"] == 0
@@ -153,12 +195,12 @@ async def test_a_search_tool_isnt_available_in_naive_mode():
 
 async def test_guard_rejections_and_tool_errors_are_counted():
     steps = flu_shot_booking()
-    steps[4:4] = [
+    steps[2:2] = [
         [("time_selected", {})],  # not a function in choose_appointment
         [("update_booking", {"provider_id": "prov_999"})],  # unknown id
+        [("choices_complete", {})],  # before the provider and location
     ]
-    steps[6:6] = [[("choices_complete", {})]]  # before the provider and location
-    steps.insert(-3, [("book_appointment", {"draft_revision": 1, "confirmed": True})])  # stale revision
+    steps.insert(-2, [("book_appointment", {"draft_revision": 1, "confirmed": True})])  # stale revision
     settings = Settings("gpt-4o", "gpt-4o-mini", max_rounds=15)  # the detours are in one assistant turn
     record = await converse(SCENARIOS["stale_confirmation"], "tools", SCHEDULER, settings, Script(steps), Script(CALLER_LINES[2:]))
     assert record["ok"], record["why"]
@@ -174,8 +216,8 @@ async def test_a_booking_that_violates_the_true_facts_isnt_correct():
     # validator, and the booking even matches the outcome pattern.
     scenario = SCENARIOS["correction_new_patient"]
     steps = flu_shot_booking()
-    steps[3] = [("update_booking", {"service_id": "appt_002", "patient": {"is_new_patient": False}})]
-    steps[4] = [("update_booking", {"provider_id": "prov_043", "location_id": "loc_004"})]
+    steps[1] = [("update_booking", {"service_id": "appt_002", "patient": {"is_new_patient": False}})]
+    steps[2] = [("update_booking", {"provider_id": "prov_043", "location_id": "loc_004"})]
     steps.remove([("search_services", {"query": "flu shot"})])
     record = await converse(scenario, "tools", SCHEDULER, SETTINGS, Script(steps), Script(CALLER_LINES[2:]))
     assert record["booking"]["provider_id"] == "prov_043"
@@ -197,12 +239,8 @@ async def test_prebooked_times_are_held_before_the_call():
         return "Which time?"
 
     scheduler = Script([
-        "Hello!",
-        [("start_booking", {})],
         [("update_booking", {"service_id": "appt_021", "patient": {"is_new_patient": False, "has_referral": True}})],
-        [("service_chosen", {})],
-        [("update_booking", {"provider_id": "prov_000", "location_id": "loc_001"})],
-        [("choices_complete", {})],
+        [("update_booking", {"provider_id": "prov_000", "location_id": "loc_001"})],  # ready: on to offer_times
         [("get_availability", {"day": "2026-10-19"})],
         offered_starts,
     ])  # fmt: skip
@@ -211,13 +249,13 @@ async def test_prebooked_times_are_held_before_the_call():
 
 
 async def test_limits_and_errors_end_the_run_with_a_record():
-    talkative = Script(["Hello!"] + ["Could you say that again?"] * 3)
+    talkative = Script(["Could you say that again?"] * 3)
     record = await converse(
         SCENARIOS["obgyn_new_patient"], "tools", SCHEDULER, Settings("m", "c", max_turns=2), talkative, Script(["Hm?"] * 2)
     )
     assert record["ended_by"] == "turn_limit" and record["turns"] == 2
 
-    looping = Script(["Hello!"] + [[("check_booking", {})]] * 3)
+    looping = Script([[("check_booking", {})]] * 3)
     record = await converse(
         SCENARIOS["obgyn_new_patient"], "tools", SCHEDULER, Settings("m", "c", max_rounds=3), looping, Script([])
     )
@@ -241,12 +279,16 @@ async def test_the_caller_knows_its_facts_but_not_the_outcome():
     for pattern in scenario.outcome.booked:
         assert pattern.service_id not in prompt and pattern.provider_id not in prompt
 
-    # Corrections are listed apart from other details, in order, to be said later.
+    # Corrections are listed apart from other details, in order, to be said later. A
+    # detail after a correction belongs to it, so it can't come out first.
     prompt = caller_prompt(SCENARIOS["correction_service"].caller)
     corrections = prompt[prompt.index("Corrections:") : prompt.index("How to behave")]
-    assert corrections.index("just an EKG") < corrections.index("knee MRI")
-    assert "Midtown is fine" not in corrections
+    assert corrections.index("just an EKG") < corrections.index("knee MRI") < corrections.index("Midtown is fine")
+    assert "Midtown is fine" not in prompt[: prompt.index("Corrections:")]
     assert "Corrections:" not in caller_prompt(SCENARIOS["mission_blood_draw"].caller)
+    # "Then let's just do a flu shot" changes the caller's mind too.
+    prompt = caller_prompt(SCENARIOS["repeated_searches"].caller)
+    assert "flu shot" in prompt[prompt.index("Corrections:") :]
 
     llm = Script([f"Thanks, bye. {END}"])
     caller = SimulatedCaller(scenario.caller, llm, "gpt-4o-mini")
@@ -260,16 +302,21 @@ async def test_the_caller_knows_its_facts_but_not_the_outcome():
 def test_text_flow_matches_the_compiled_node():
     flow = TextFlow(AgentBuilder.from_dict(SCHEDULER, build_registry()))
     flow.start()
-    assert flow.path == ["greeting"] and flow.system == SCHEDULER["persona"]
-    assert [t["function"]["name"] for t in flow.tools()] == ["start_booking", "handoff_to_staff"]
-    assert flow.tools()[1]["function"]["parameters"]["required"] == ["reason"]
+    assert flow.path == ["choose_appointment"] and flow.system == SCHEDULER["persona"]
+    assert not flow.responds and flow.take_speech() == [SCHEDULER["first_message"]]
+    tools = {t["function"]["name"]: t["function"] for t in flow.tools()}
+    assert list(tools) == [
+        "apply_request", "search_services", "find_providers", "find_locations", "catalog_overview", "update_booking",
+        "check_booking", "choices_complete", "handoff_to_staff",
+    ]  # fmt: skip
+    assert tools["handoff_to_staff"]["parameters"]["required"] == ["reason", "staff_requested"]
 
 
 async def test_bad_arguments_are_errors_not_exceptions():
     flow = TextFlow(AgentBuilder.from_dict(SCHEDULER, build_registry()))
     flow.start()
-    assert (await flow.call("start_booking", "{not json"))[0]["status"] == "error"
-    assert (await flow.call("start_booking", "[1]"))[0]["status"] == "error"
+    assert (await flow.call("choices_complete", "{not json"))[0]["status"] == "error"
+    assert (await flow.call("choices_complete", "[1]"))[0]["status"] == "error"
     assert (await flow.call("book_appointment", "{}"))[0]["status"] == "error"
 
 

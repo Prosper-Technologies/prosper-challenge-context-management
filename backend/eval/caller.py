@@ -31,21 +31,35 @@ How to behave:
 
 # A detail that changes the caller's mind, said only after the assistant has acted on
 # the earlier request.
-CORRECTION = re.compile(r"^(actually|oh wait|sorry)\b|\binstead\b", re.IGNORECASE)
+CORRECTION = re.compile(r"^(actually|oh wait|sorry|then)\b|\binstead\b", re.IGNORECASE)
 
 
 def caller_prompt(caller: Caller) -> str:
-    facts = [d for d in caller.details if not CORRECTION.search(d)]
-    corrections = [d for d in caller.details if CORRECTION.search(d)]
+    # Details keep their scenario order: one listed after a correction belongs to
+    # the corrected request, so it's said only after that correction.
+    facts: list[str] = []
+    corrections: list[tuple[str, list[str]]] = []
+    for d in caller.details:
+        if CORRECTION.search(d):
+            corrections.append((d, []))
+        elif corrections:
+            corrections[-1][1].append(d)
+        else:
+            facts.append(d)
     details = corrections_text = after = ""
     if facts:
         details = "\nThings you'd say when they become relevant:\n" + "".join(f'- "{d}"\n' for d in facts)
     if corrections:
+        lines = []
+        for i, (correction, follow_ups) in enumerate(corrections, 1):
+            lines.append(f'{i}. "{correction}"\n')
+            lines += [f'   Only after saying it, when it becomes relevant: "{d}"\n' for d in follow_ups]
         corrections_text = (
             "\nCorrections: you change your mind. Say these one at a time, in this order, each only after the "
-            "assistant has acted on your earlier request (for example once it has offered times or read the "
-            "booking back). Your opening may contain a mistake that a correction fixes; until you say it, stick "
-            "with what you said.\n" + "".join(f'- "{d}"\n' for d in corrections)
+            "assistant has acted on your earlier request (for example once it has offered options or times, or "
+            "read the booking back). Your opening may contain a mistake that a correction fixes; until you say "
+            "it, stick with what you said. A line under a correction is part of the corrected request: never "
+            "say it before that correction.\n" + "".join(lines)
         )
         after = ", and only after you have said all of your corrections"
     return PROMPT.format(

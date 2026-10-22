@@ -73,6 +73,9 @@ def summarize(records: list[dict], scheduler_model: str, caller_model: str) -> d
             "turns": _mean(r["turns"] for r in runs),
             "llm_calls": _mean(r["llm_calls"] for r in runs),
             "tool_calls": _mean(sum(r["tool_calls"].values()) for r in runs),
+            "transitions": _mean(r["transitions"] for r in runs),
+            # Records from before automatic edges have none.
+            "auto_transitions": _mean(r.get("auto_transitions", 0) for r in runs),
             "input_tokens": _mean(r["usage"]["input"] for r in runs),
             "cached_share": (sum(r["usage"]["cached"] for r in runs) / input_tokens) if input_tokens else 0.0,
             "output_tokens": _mean(r["usage"]["output"] for r in runs),
@@ -178,6 +181,7 @@ def render(meta: dict, records: list[dict]) -> str:
     row("Caller turns (mean)", lambda s: f"{s['turns']:.1f}")
     row("Scheduler LLM calls (mean)", lambda s: f"{s['llm_calls']:.1f}")
     row("Tool and edge calls (mean)", lambda s: f"{s['tool_calls']:.1f}")
+    row("Transitions (mean): all / taken by code", lambda s: f"{s['transitions']:.1f} / {s['auto_transitions']:.1f}")
     row("Scheduler input tokens / conversation (mean)", lambda s: f"{s['input_tokens']:,.0f}")
     row("Cached share of input", lambda s: f"{s['cached_share']:.0%}")
     row("Scheduler output tokens / conversation (mean)", lambda s: f"{s['output_tokens']:,.0f}")

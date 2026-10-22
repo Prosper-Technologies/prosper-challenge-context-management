@@ -9,6 +9,12 @@
 #   task_messages   appended to the context when a node is entered (Pipecat Flows'
 #                   default APPEND strategy: nothing earlier is removed)
 #   functions       the tools the LLM may call while the node is active
+#   pre_actions     a tts_say is spoken without an LLM call and, unless it opts out
+#                   with append_text_to_context, added to the context as the
+#                   assistant's (after the task messages)
+#   respond_immediately
+#                   when false, the LLM isn't called on entry: the turn ends with
+#                   whatever the pre-actions said
 #
 # A handler returning a next node transitions after the tool round's results are in
 # the context. A node with an `end_conversation` post-action ends the call once the
@@ -32,6 +38,8 @@ class TextFlow:
         self.path: list[str] = []
         self.state_updates: list[str] = []  # tools that changed state without a transition
         self.ending = False  # in a node that ends the call after its reply
+        self.responds = True  # the LLM speaks as soon as the node is entered
+        self.speech: list[str] = []  # said by pre-actions, not yet part of a turn
         self.ended = False
 
     def start(self) -> None:
@@ -45,6 +53,16 @@ class TextFlow:
         self.functions = {f.name: f for f in node["functions"]}
         self.path.append(node["name"])
         self.ending = any(a.get("type") == "end_conversation" for a in node.get("post_actions", []))
+        self.responds = node.get("respond_immediately", True)
+        for action in node.get("pre_actions", []):
+            if action.get("type") == "tts_say":
+                self.speech.append(action["text"])
+                if action.get("append_text_to_context", True):
+                    self.messages.append({"role": "assistant", "content": action["text"]})
+
+    def take_speech(self) -> list[str]:
+        speech, self.speech = self.speech, []
+        return speech
 
     def prompt(self) -> list[dict]:
         return [{"role": "system", "content": self.system}, *self.messages]

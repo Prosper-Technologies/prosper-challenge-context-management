@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Optional
 
-from agent_builder import AgentBuilder
+from agent_builder import AUTO_TRANSITION, AgentBuilder
 from catalog import BookingDraft, Calendar, PatientFacts, default_catalog, default_policy
 from catalog.models import CATALOG_PATH
 from catalog.scenarios import Scenario, check_outcome, prebook
@@ -35,11 +35,11 @@ from .flow import TextFlow
 from .llm import LLM, Usage
 
 MODES = ("naive", "tools")
-SEARCH_TOOLS = frozenset({"catalog_overview", "search_services", "find_providers", "find_locations"})
+SEARCH_TOOLS = frozenset({"catalog_overview", "search_services", "find_providers", "find_locations", "apply_request"})
 
 NAIVE_NOTE = """
 
-You have no catalog search tools. The clinic's full catalog is below as JSON: its locations, providers, appointment types and booking policies. Wherever your instructions mention search_services, find_providers, find_locations or catalog_overview, look the answer up in this catalog instead, and record the IDs you find with update_booking.
+You have no catalog search tools or apply_request. The clinic's full catalog is below as JSON: its locations, providers, appointment types and booking policies. Wherever your instructions mention apply_request, search_services, find_providers, find_locations or catalog_overview, look the answer up in this catalog instead, and record the IDs and patient facts with update_booking. Ask the caller to resolve ambiguous names before recording a choice.
 
 CATALOG:
 """
@@ -67,6 +67,9 @@ def mode_agent(mode: str, agent: dict) -> dict:
         for node in agent["nodes"]:
             if "tools" in node:
                 node["tools"] = [t for t in node["tools"] if t not in SEARCH_TOOLS]
+            for edge in node.get("edges", []):
+                if "auto_after" in edge:
+                    edge["auto_after"] = [t for t in edge["auto_after"] if t not in SEARCH_TOOLS]
     elif mode != "tools":
         raise ValueError(f"unknown mode {mode!r}")
     return agent
@@ -102,9 +105,12 @@ async def converse(
     latencies: list[float] = []
     models: set[str] = set()
 
-    async def assistant_turn() -> Optional[str]:
-        """Run the scheduler until it speaks; None if it never does within the limit."""
-        spoken = []
+    async def assistant_turn(respond: bool = True) -> Optional[str]:
+        """Run the scheduler until it speaks; None if it never does within the limit.
+        Pre-actions' speech comes first; a node entered without responding ends the turn."""
+        spoken = flow.take_speech()
+        if not respond:
+            return " ".join(spoken)
         for _ in range(settings.max_rounds):
             reply = await scheduler.complete(settings.scheduler_model, flow.prompt(), flow.tools() or None)
             nonlocal usage
@@ -143,6 +149,8 @@ async def converse(
                     result = {"status": "error", "message": "A transition is already in progress."}
                 else:
                     result, next_node = await flow.call(c.name, c.arguments)
+                    if next_node is not None and AUTO_TRANSITION in result:
+                        counts["auto_transitions"] += 1
                 flow.messages.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(result)})
                 tool_calls[c.name] += 1
                 _count(counts, c.name, kind, result)
@@ -159,13 +167,16 @@ async def converse(
             if next_node is not None:
                 counts["transitions"] += 1
                 flow.enter(next_node)
+                spoken += flow.take_speech()
+                if not flow.responds:
+                    return " ".join(spoken)
         return None
 
     ended_by, error = "turn_limit", None
     turns = 0
     try:
         flow.start()
-        said = await assistant_turn()
+        said = await assistant_turn(respond=flow.responds)
         while said is not None:
             transcript.append({"role": "assistant", "text": said})
             if flow.ended:
@@ -235,6 +246,7 @@ async def converse(
         "edge_errors": counts["edge_errors"],
         "unknown_calls": counts["unknown_calls"],
         "transitions": counts["transitions"],
+        "auto_transitions": counts["auto_transitions"],
         "state_updates": len(flow.state_updates),
         "usage": vars(usage),
         "prompt_tokens": prompt_tokens,
@@ -254,7 +266,7 @@ def _count(counts: Counter, name: str, kind: str, result: dict) -> None:
             counts["tool_errors"] += 1
             if name == "book_appointment":
                 counts["invalid_booking_attempts"] += 1
-        elif name == "update_booking" and result.get("check", {}).get("status") == "blocked":
+        elif name in {"update_booking", "apply_request"} and result.get("check", {}).get("status") == "blocked":
             counts["blocked_drafts"] += 1
     elif result.get("status") == "error":
         counts["guard_rejections" if "guard" in result else "edge_errors"] += 1

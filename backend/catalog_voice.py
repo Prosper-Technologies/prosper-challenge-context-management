@@ -70,7 +70,7 @@ def build_registry(
         return GuardBinding(
             guard.name,
             guard.description,
-            lambda state: guard.run(context(state).session),
+            lambda state, args: guard.run(context(state).session, args),
             frozenset(guard.completes),
         )
 

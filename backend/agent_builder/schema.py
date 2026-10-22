@@ -6,8 +6,10 @@
 # verbatim. The ONLY things we add are `edges`: transitions expressed as DATA (a string
 # `target`) rather than as Python closures — because a Copilot can emit a string, not
 # a callable — and an optional canvas position (`ui`). `AgentBuilder` turns the edge
-# strings back into the closures Pipecat wants. Likewise, node `tools` and edge
-# `guard`s are names the application's registry (registry.py) resolves.
+# strings back into the closures Pipecat wants. Likewise, node `tools` and
+# `enter_tools` and edge `guard`s are names the application's registry (registry.py)
+# resolves. An edge's `auto_after` lets code take a transition the LLM would
+# otherwise spend a round trip on.
 #
 # These models check document *shape* only (structural parsing). Whether the graph
 # can actually run — targets exist, names are unique, actions are supported — is
@@ -140,6 +142,11 @@ class Edge(_Model):
     guard: Optional[str] = Field(
         default=None, description="A named check that must pass before the edge is taken (see the registry)."
     )
+    auto_after: list[str] = Field(
+        default_factory=list,
+        description="Node tools after which the edge is taken without an LLM call, when the call changed the "
+        "state and the guard passes.",
+    )
 
 
 class Node(_Model):
@@ -150,6 +157,11 @@ class Node(_Model):
     role_message: Optional[str] = Field(default=None, description="Overrides the agent persona.")
     edges: list[Edge] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list, description="Registry tools the node exposes besides its edges.")
+    enter_tools: list[str] = Field(
+        default_factory=list,
+        description="Registry tools run without arguments when the node is entered; their results are added to "
+        "the result of the transition into it.",
+    )
     pre_actions: list[AnyAction] = Field(default_factory=list)
     post_actions: list[AnyAction] = Field(default_factory=list)
     end: bool = Field(default=False, description="Terminal: the call ends after this node.")
@@ -164,5 +176,9 @@ class AgentConfig(_Model):
     voice_id: str = DEFAULT_VOICE_ID
     model: str = DEFAULT_MODEL
     persona: str = Field(default="", description="Global role message, applied to every node.")
+    first_message: Optional[str] = Field(
+        default=None,
+        description="Said when the call starts, without an LLM call; the initial node then waits for the caller.",
+    )
     initial_node: str
     nodes: list[Node]

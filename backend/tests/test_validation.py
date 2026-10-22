@@ -251,3 +251,11 @@ def test_validate_does_not_mutate():
     validate(config)
     validate(doc)
     assert config.to_dict() == before == doc
+
+
+def test_an_empty_first_message_starts_the_call_in_silence():
+    doc = two_nodes()
+    assert validate({**doc, "first_message": "Hello!"}) == []
+    assert warnings(validate({**doc, "first_message": "  "})) == [
+        (["first_message"], "The first message is empty, so the call starts in silence.")
+    ]

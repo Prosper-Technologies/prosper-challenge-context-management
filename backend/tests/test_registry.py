@@ -6,6 +6,7 @@ import subprocess
 import sys
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,8 +28,8 @@ def fake_registry() -> Registry:
             "book": ToolBinding("book", "Book it.", {}, (), lambda args, state: ({}, True)),
         },
         guards={
-            "ready": GuardBinding("ready", "Ready.", lambda state: None),
-            "done": GuardBinding("done", "Booked.", lambda state: None, frozenset({"book"})),
+            "ready": GuardBinding("ready", "Ready.", lambda state, args: None),
+            "done": GuardBinding("done", "Booked.", lambda state, args: None, frozenset({"book"})),
         },
         state_keys=frozenset({"booking"}),
     )
@@ -124,6 +125,96 @@ def test_edge_properties_cant_collect_tool_state():
 # ---- compilation ----------------------------------------------------------------------
 
 
+def test_automatic_edges_need_a_guard_and_one_of_the_nodes_tools():
+    doc = agent([node("a", [edge("go", "b", auto_after=["book"])], tools=["lookup"]), node("b", end=True)])
+    assert errors(doc) == [
+        (["nodes", 0, "edges", 0, "auto_after"],
+         "An automatic edge needs a guard; without one it's taken after every listed tool call."),
+        (["nodes", 0, "edges", 0, "auto_after", 0], "'book' isn't one of this node's tools, so it can't trigger the edge."),
+    ]  # fmt: skip
+    assert errors(agent([node("a", [edge("go", "b", "ready", auto_after=["lookup"])], tools=["lookup"]),
+                         node("b", end=True)])) == []  # fmt: skip
+
+
+def test_entry_tools_must_run_without_arguments_on_a_transition():
+    doc = two_nodes()
+    doc["nodes"][1]["enter_tools"] = ["lookup", "missing"]
+    doc["nodes"][0]["enter_tools"] = ["book"]
+    assert errors(doc) == [
+        (["nodes", 0, "enter_tools", 0], "Entry tools run on a transition, and the initial node isn't entered through one."),
+        (["nodes", 1, "enter_tools", 0], "Tool 'lookup' needs arguments, so it can't run on entry."),
+        (["nodes", 1, "enter_tools", 1], "Unknown tool 'missing'."),
+    ]  # fmt: skip
+
+
+def counting_registry() -> Registry:
+    """`bump` counts calls in the state; `ready` passes from the second; `offer`
+    runs without arguments and `peek` changes nothing."""
+
+    def bump(args, state):
+        state["n"] = state.get("n", 0) + 1
+        return {"n": state["n"]}, True
+
+    def offer(args, state):
+        state["offered"] = True
+        return {"times": ["9:00"]}, True
+
+    return Registry(
+        tools={
+            "bump": ToolBinding("bump", "Count.", {}, (), bump),
+            "peek": ToolBinding("peek", "Look.", {}, (), lambda args, state: ({"n": state.get("n", 0)}, False)),
+            "offer": ToolBinding("offer", "Offer times.", {}, (), offer),
+        },
+        guards={"ready": GuardBinding("ready", "Two bumps.", lambda state, args: None if state.get("n", 0) >= 2 else {"message": "Not yet."})},
+    )  # fmt: skip
+
+
+def counting_agent() -> dict:
+    doc = agent([
+        node("a", [edge("go", "b", "ready", auto_after=["bump"])], tools=["bump", "peek"]),
+        node("b", [edge("back", "a")], tools=["peek"]),
+    ])  # fmt: skip
+    doc["nodes"][1]["enter_tools"] = ["offer"]
+    return doc
+
+
+async def test_a_state_change_takes_the_automatic_edge_once_its_guard_passes():
+    builder = AgentBuilder.from_dict(counting_agent(), counting_registry())
+    functions = {f.name: f for f in builder.build_initial_node()["functions"]}
+    flow = SimpleNamespace(state={})
+
+    assert await functions["bump"].handler({}, flow) == ({"n": 1}, None)  # the guard refuses: stay
+    assert await functions["peek"].handler({}, flow) == ({"n": 1}, None)
+    result, next_node = await functions["bump"].handler({}, flow)
+    assert next_node["name"] == "b"
+    # The tool's result, then the edge's, with the target's entry tools.
+    assert result == {"n": 2, "auto_transition": {"function": "go", "status": "success", "offer": {"times": ["9:00"]}}}
+    assert flow.state == {"n": 2, "offered": True}
+
+
+async def test_an_explicit_edge_runs_entry_tools_too():
+    builder = AgentBuilder.from_dict(counting_agent(), counting_registry())
+    functions = {f.name: f for f in builder.build_initial_node()["functions"]}
+    flow = SimpleNamespace(state={"n": 2})
+    result, next_node = await functions["go"].handler({}, flow)
+    assert next_node["name"] == "b" and result == {"status": "success", "offer": {"times": ["9:00"]}}
+
+
+def test_the_first_message_opens_the_call_but_not_a_return_to_the_initial_node():
+    doc = counting_agent()
+    doc["first_message"] = "Hello!"
+    doc["nodes"][0]["pre_actions"] = [{"type": "tts_say", "text": "Let's start."}]
+    builder = AgentBuilder.from_dict(doc, counting_registry())
+    opening = builder.build_initial_node()
+    assert opening["respond_immediately"] is False
+    assert opening["pre_actions"] == [{"type": "tts_say", "text": "Hello!"}, {"type": "tts_say", "text": "Let's start."}]
+
+    again = builder._make_node(builder._nodes_by_name["a"])  # what the "back" edge enters
+    assert "respond_immediately" not in again
+    assert again["pre_actions"] == [{"type": "tts_say", "text": "Let's start."}]
+    assert "respond_immediately" not in AgentBuilder.from_dict(counting_agent(), counting_registry()).build_initial_node()
+
+
 def test_node_tools_compile_beside_edges():
     builder = AgentBuilder.from_dict(two_nodes(tools=["lookup"]), fake_registry())
     functions = builder.build_initial_node()["functions"]
@@ -187,7 +278,7 @@ def test_saved_scheduler_runs_through_call_selection(store, tmp_path):
     (store.root / "scheduler.json").write_text(json.dumps(SCHEDULER))
     builder = select_agent({"agent_id": "scheduler"}, store)
     assert builder.config.name == "Clinic Scheduler"
-    assert select_agent({"agent": SCHEDULER}, store).config.initial_node == "greeting"
+    assert select_agent({"agent": SCHEDULER}, store).config.initial_node == "choose_appointment"
 
 
 def test_building_the_registry_and_contract_creates_no_calendar():

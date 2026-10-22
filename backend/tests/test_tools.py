@@ -278,16 +278,29 @@ def test_a_time_taken_by_another_session_is_a_structured_error():
 
 
 def test_guards_follow_the_booking(ctx):
-    def failing():
-        return {name for name, g in GUARDS.items() if g.run(ctx.session) is not None}
+    booking = set(GUARDS) - {"request_recorded"}
 
-    assert failing() == set(GUARDS)
+    def failing():
+        return {name for name in booking if GUARDS[name].run(ctx.session) is not None}
+
+    assert failing() == booking
     run(ctx, "update_booking", service_id="appt_065")
     assert failing() == {"booking_ready", "slot_selected", "booking_completed"}
     draft = selected(ctx)["draft"]
     assert failing() == {"booking_completed"}
     run(ctx, "book_appointment", draft_revision=draft["revision"], confirmed=True)
     assert failing() == set()
+
+
+def test_a_handoff_needs_a_blocked_request_or_a_request_for_staff(ctx):
+    guard = GUARDS["request_recorded"]
+    failure = guard.run(ctx.session, {"staff_requested": False})
+    assert failure["guard"] == "request_recorded" and "update_booking" in failure["message"]
+    assert guard.run(ctx.session, {"staff_requested": True}) is None
+    run(ctx, "update_booking", service_id="appt_065")
+    assert guard.run(ctx.session, {}) is not None  # recorded, but it can still be booked
+    run(ctx, "update_booking", patient={"has_referral": False})
+    assert guard.run(ctx.session, {}) is None  # blocked by REFERRAL_REQUIRED, so staff see why
 
 
 def test_a_failed_guard_says_how_to_recover(ctx):

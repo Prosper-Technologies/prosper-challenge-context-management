@@ -8,13 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pipecat.frames.frames import EndFrame, LLMSetToolsFrame
+from pipecat.frames.frames import EndFrame, LLMRunFrame, LLMSetToolsFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat_flows import FlowInitializationError
+from pipecat_flows.actions import ActionFinishedFrame
 
 from agent_builder import EMPTY_REGISTRY, AgentBuilder
 from agent_builder.runtime import ClientReadyGate, TrackingFlowManager
@@ -35,6 +36,10 @@ class Call:
 
         async def queue_frame(frame, direction=None):
             self.timeline.append(frame)
+            if isinstance(frame, ActionFinishedFrame):
+                # The frame "reaches the end of the pipeline" at once, so an action
+                # that waits for it (tts_say) completes as it would on a call.
+                self.flow_manager._action_manager._decrement_ongoing_actions_count()
 
         async def queue_frames(frames, direction=None):
             self.timeline.extend(frames)
@@ -275,11 +280,18 @@ def scheduler_call() -> Call:
     return Call(config, build_registry(calendar=Calendar(clock=lambda: now)))
 
 
+async def test_scheduler_opens_with_its_first_message_and_waits():
+    call = scheduler_call()
+    await call.start()
+    (said,) = [f for f in call.timeline if isinstance(f, TTSSpeakFrame)]
+    assert said.text == call.builder.config.first_message
+    assert not any(isinstance(f, LLMRunFrame) for f in call.timeline)  # the caller speaks first
+    assert [e["node"] for e in call.events] == ["choose_appointment"]
+
+
 async def test_tool_calls_stay_in_the_node_and_report_state_changes():
     call = scheduler_call()
     await call.start()
-    await call.call_function("start_booking", {})
-    assert call.events[-1]["node"] == "choose_appointment"
 
     found = await call.call_function("search_services", {"query": "knee MRI"})
     assert found["services"][0]["id"] == "appt_065"
@@ -287,7 +299,8 @@ async def test_tool_calls_stay_in_the_node_and_report_state_changes():
 
     result = await call.call_function("update_booking", {"service_id": "appt_065"})
     assert result["draft"]["service"]["id"] == "appt_065"
-    assert [e["node"] for e in call.events] == ["greeting", "choose_appointment"]  # no new path step
+    assert "auto_transition" not in result  # not ready, so the node stays
+    assert [e["node"] for e in call.events] == ["choose_appointment"]  # no new path step
     (update,) = call.updates
     assert update["node"] == "choose_appointment" and update["via"] == "update_booking"
     assert update["state"]["booking"]["draft"]["service_id"] == "appt_065"
@@ -297,7 +310,6 @@ async def test_tool_calls_stay_in_the_node_and_report_state_changes():
 async def test_a_failed_guard_leaves_the_node_and_state_alone():
     call = scheduler_call()
     await call.start()
-    await call.call_function("start_booking", {})
     await call.call_function("update_booking", {"service_id": "appt_065"})
     assert call.flow_manager.current_node == "choose_appointment"
     state = copy.deepcopy(call.flow_manager.state)
@@ -313,31 +325,50 @@ async def test_a_failed_guard_leaves_the_node_and_state_alone():
 async def test_edges_cant_overwrite_tool_state():
     call = scheduler_call()
     await call.start()
-    await call.call_function("start_booking", {})
     await call.call_function("update_booking", {"service_id": "appt_065"})
     booking = copy.deepcopy(call.flow_manager.state["booking"])
-    await call.call_function("handoff_to_staff", {"reason": "wants a person", "booking": "forged"})
+    await call.call_function(
+        "handoff_to_staff", {"reason": "wants a person", "staff_requested": True, "booking": "forged"}
+    )
     assert call.flow_manager.state["booking"] == booking
     assert call.flow_manager.state["reason"] == "wants a person"
+
+
+async def test_a_handoff_for_an_unbookable_request_needs_it_recorded():
+    call = scheduler_call()
+    await call.start()
+    refused = await call.call_function("handoff_to_staff", {"reason": "no eye exams", "staff_requested": False})
+    assert refused["guard"] == "request_recorded"
+    assert call.flow_manager.current_node == "choose_appointment"
+
+    blocked = await call.call_function("update_booking", {"service_id": "appt_045"})  # nobody offers it
+    assert blocked["check"]["status"] == "blocked"
+    await call.call_function("handoff_to_staff", {"reason": "no eye exams", "staff_requested": False})
+    assert call.flow_manager.current_node == "handoff"
 
 
 async def test_scheduler_reaches_success_only_with_a_receipt():
     call = scheduler_call()
     await call.start()
-    await call.call_function("start_booking", {})
     assert "update_booking" in call.tool_names and "book_appointment" not in call.tool_names
     await call.call_function("update_booking", {"service_id": "appt_065"})
     result = await call.call_function("update_booking", {"patient": {"has_referral": True, "is_new_patient": False}})
     assert result["check"]["next_question"]["field"] == "provider_id"
-    await call.call_function("update_booking", {"provider_id": "prov_014", "location_id": "loc_004"})
-    await call.call_function("choices_complete", {})
+
+    # The draft becomes ready, so code takes choices_complete and offer_times starts
+    # with the times it would otherwise have asked for.
+    ready = await call.call_function("update_booking", {"provider_id": "prov_014", "location_id": "loc_004"})
     assert call.flow_manager.current_node == "offer_times"
+    moved = ready["auto_transition"]
+    assert moved["function"] == "choices_complete" and moved["status"] == "success"
+    times = moved["get_availability"]
+    assert len(times["slots"]) == 3
+    assert call.events[-1]["via"] == "choices_complete"  # the edge, not the tool, for the canvas
 
     blocked = await call.call_function("time_selected", {})
-    assert blocked["guard"] == "slot_selected"
-    times = await call.call_function("get_availability", {})
+    assert blocked["guard"] == "slot_selected"  # the offer isn't a pick
     picked = await call.call_function("update_booking", {"slot_id": times["slots"][1]["id"]})
-    await call.call_function("time_selected", {})
+    assert picked["auto_transition"]["function"] == "time_selected"
     assert call.flow_manager.current_node == "confirm"
     assert "book_appointment" in call.tool_names
 
@@ -347,11 +378,14 @@ async def test_scheduler_reaches_success_only_with_a_receipt():
     revision = picked["draft"]["revision"]
     receipt = await call.call_function("book_appointment", {"draft_revision": revision, "confirmed": True})
     assert receipt["confirmation"].startswith("BK-")
-    await call.call_function("booking_done", {})
+    assert receipt["auto_transition"]["function"] == "booking_done"
 
-    assert [e["node"] for e in call.events] == [
-        "greeting", "choose_appointment", "offer_times", "confirm", "success",
-    ]  # fmt: skip
+    assert [(e["node"], e["via"]) for e in call.events] == [
+        ("choose_appointment", None),
+        ("offer_times", "choices_complete"),
+        ("confirm", "time_selected"),
+        ("success", "booking_done"),
+    ]
     assert call.events[-1]["state"]["booking"]["reservation"]["confirmation"] == receipt["confirmation"]
     assert any(isinstance(f, EndFrame) for f in call.timeline)
 
@@ -359,23 +393,23 @@ async def test_scheduler_reaches_success_only_with_a_receipt():
 async def test_a_correction_at_confirm_invalidates_the_chosen_time():
     call = scheduler_call()
     await call.start()
-    await call.call_function("start_booking", {})
-    await call.call_function(
+    ready = await call.call_function(
         "update_booking",
         {"service_id": "appt_065", "provider_id": "prov_014", "location_id": "loc_004",
          "patient": {"has_referral": True, "is_new_patient": False}},
     )  # fmt: skip
-    await call.call_function("choices_complete", {})
-    times = await call.call_function("get_availability", {})
+    times = ready["auto_transition"]["get_availability"]
     picked = await call.call_function("update_booking", {"slot_id": times["slots"][0]["id"]})
-    await call.call_function("time_selected", {})
+    assert call.flow_manager.current_node == "confirm"
 
     moved = await call.call_function("update_booking", {"provider_id": "prov_015", "location_id": "loc_005"})
     assert "slot" not in moved["draft"]
+    assert "auto_transition" not in moved  # confirm has no automatic edge for a correction
     stale = await call.call_function(
         "book_appointment", {"draft_revision": picked["draft"]["revision"], "confirmed": True}
     )
     assert stale["error"]["code"] == "STALE_REVISION"
     assert call.flow_manager.state["booking"]["reservation"] is None
-    await call.call_function("change_time", {})
+    changed = await call.call_function("change_time", {})
     assert call.flow_manager.current_node == "offer_times"
+    assert changed["get_availability"]["slots"]  # entry tools run on every transition in

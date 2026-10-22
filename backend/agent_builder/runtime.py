@@ -11,7 +11,8 @@
 #
 # Tools change the state without a transition, so the builder also calls
 # `report_state` after such a change, which sends a separate `state_updated`
-# event. It never counts as a node entry.
+# event. It never counts as a node entry. A transition a tool takes automatically
+# (Edge.auto_after) is reported as taken via the edge's function, not the tool's.
 #
 
 import json
@@ -19,6 +20,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from loguru import logger
 from pipecat_flows import FlowManager
+
+from .builder import AUTO_TRANSITION
 
 NodeEnteredCallback = Callable[[dict], Awaitable[None]]
 StateUpdatedCallback = Callable[[dict], Awaitable[None]]
@@ -60,7 +63,9 @@ class TrackingFlowManager(FlowManager):
         self._entering: Optional[dict] = None  # the activation in progress, until reported
 
     async def _execute_transition(self, transition_info: dict[str, Any]) -> None:
-        self._via = transition_info.get("function_name")
+        result = transition_info.get("result")
+        auto = result.get(AUTO_TRANSITION) if isinstance(result, dict) else None
+        self._via = auto["function"] if isinstance(auto, dict) else transition_info.get("function_name")
         try:
             await super()._execute_transition(transition_info)
         except Exception as e:

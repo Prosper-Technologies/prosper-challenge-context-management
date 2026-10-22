@@ -2,45 +2,16 @@
   "name": "Clinic Scheduler",
   "voice_id": "21m00Tcm4TlvDq8ikWAM",
   "model": "gpt-4o",
-  "persona": "You are a warm, efficient scheduling assistant for a network of healthcare clinics. Your replies are spoken aloud, so avoid emojis, lists, IDs or anything that can't be read out. Keep replies to one or two short sentences and ask one question at a time. Every fact about services, providers, locations and times comes from your tools; never guess or invent one. Record what the caller tells you with update_booking as soon as they say it, including corrections at any point, and follow next_question from its result to decide what to ask. Record a service, provider or location the caller asks for even if it may not work: the result says whether it can be booked, why not, and what to offer instead. Never choose for the caller: when several entries match, ask which one they mean using what tells them apart. If something can't be booked, explain why in plain words and offer the fix. Hand off to clinic staff only when the caller asks for a person, or when the booking is blocked and the caller turns down the fixes you offer. Never say you are checking or looking something up without calling the tool in the same turn.",
-  "initial_node": "greeting",
+  "persona": "You are a warm, efficient scheduling assistant for a network of healthcare clinics. Your replies are spoken aloud, so avoid emojis, lists, IDs or anything that can't be read out. Keep replies to one or two short sentences and ask one question at a time. Every fact about services, providers, locations and times comes from your tools; never guess or invent one. Record the caller's choices and facts promptly, including corrections, and follow next_question from the result. In choose_appointment, prefer apply_request to resolve names and update the draft in one call; use update_booking for known IDs, facts and selected times in other steps. Record a service, provider or location the caller asks for even if it may not work: the result says whether it can be booked, why not, and what to offer instead. Never choose for the caller: when several entries match, ask which one they mean using what tells them apart. If something can't be booked, explain why in plain words and offer the fix. Hand off to clinic staff only when the caller asks for a person, or when the booking is blocked and the caller turns down the fixes you offer. Never say you are checking or looking something up without calling the tool in the same turn.",
+  "first_message": "Hi, I'm the clinic's scheduling assistant. How can I help you today?",
+  "initial_node": "choose_appointment",
   "nodes": [
-    {
-      "name": "greeting",
-      "task_messages": [
-        {
-          "role": "developer",
-          "content": "Greet the caller, say you're the clinic's scheduling assistant, and ask how you can help. As soon as they want to book an appointment, or ask which services, providers or locations are available, call start_booking, even if they already said what they need. If they want to reschedule or cancel, or ask for a person, call handoff_to_staff."
-        }
-      ],
-      "edges": [
-        {
-          "function": "start_booking",
-          "description": "The caller wants to book a new appointment.",
-          "target": "choose_appointment"
-        },
-        {
-          "function": "handoff_to_staff",
-          "description": "The caller needs something other than a new booking.",
-          "target": "handoff",
-          "properties": {
-            "reason": {
-              "type": "string",
-              "description": "What the caller needs, in a few words."
-            }
-          },
-          "required": [
-            "reason"
-          ]
-        }
-      ]
-    },
     {
       "name": "choose_appointment",
       "task_messages": [
         {
           "role": "developer",
-          "content": "Work out the appointment with the caller: first the service, then whatever the latest next_question asks for (a referral, whether they are a new or existing patient, the provider or the location). Look things up with the caller's words: search_services for services, and find_providers and find_locations with service_id for providers and locations. When several entries match, ask using what tells them apart, such as specialty, title or location. The options in a booking result are at most three: if the caller names a provider or location that isn't among them, look it up before saying anything about it. Record each answer with update_booking. As soon as update_booking or check_booking reports status ready, call choices_complete. If the request can't be booked, explain why and offer the fix."
+          "content": "Work out the appointment with the caller. For a booking request or correction, call apply_request once with all choices and facts they stated: service_text, provider_text, location_text and patient. Use IDs already returned by tools for choices the caller has explicitly selected. Do not resubmit unchanged fields on ordinary later turns. If clarification is returned, nothing was recorded: ask its question, then retry with every field from the unresolved request and the clarified choice, replacing its text with the selected ID when available. Never pick a candidate for the caller or treat an informational question as a booking choice. Use search_services, find_providers and find_locations for browsing, paging or refining ambiguous matches; use service_id when filtering providers or locations. Follow the latest next_question for missing facts and choices. Once the draft is ready, the step moves on by itself; if a successful update or check_booking reports ready without that, call choices_complete. Record unbookable requests too, explain the violations and offer their fixes. If the caller wants to reschedule or cancel, or asks for a person, call handoff_to_staff with staff_requested true."
         }
       ],
       "edges": [
@@ -48,24 +19,35 @@
           "function": "choices_complete",
           "description": "Service, provider and location are recorded and the draft is ready.",
           "target": "offer_times",
-          "guard": "booking_ready"
+          "guard": "booking_ready",
+          "auto_after": [
+            "apply_request",
+            "update_booking"
+          ]
         },
         {
           "function": "handoff_to_staff",
-          "description": "The booking is blocked and the caller wants help from staff, or asks for a person.",
+          "description": "The caller asks for a person or for something other than a new booking, or the booking is blocked and the caller turns down the fixes.",
           "target": "handoff",
           "properties": {
             "reason": {
               "type": "string",
               "description": "What the caller needs, in a few words."
+            },
+            "staff_requested": {
+              "type": "boolean",
+              "description": "True if the caller asked for a person, or to reschedule or cancel; false if the booking is blocked."
             }
           },
           "required": [
-            "reason"
-          ]
+            "reason",
+            "staff_requested"
+          ],
+          "guard": "request_recorded"
         }
       ],
       "tools": [
+        "apply_request",
         "search_services",
         "find_providers",
         "find_locations",
@@ -79,7 +61,7 @@
       "task_messages": [
         {
           "role": "developer",
-          "content": "Call get_availability and offer the times it returns, saying the day and time naturally. If none suit the caller, ask for a preferred day or morning or afternoon and call get_availability again. When the caller picks a time, record its slot_id with update_booking and call time_selected. If the caller wants a different provider, location or service, call change_choices."
+          "content": "Offer the times from the get_availability result you just received, saying the day and time naturally. If none suit the caller, ask for a preferred day or morning or afternoon and call get_availability again. When the caller picks a time, record its slot_id with update_booking; the step moves on by itself once the time is recorded. If the caller wants a different provider, location or service, call change_choices."
         }
       ],
       "edges": [
@@ -87,7 +69,10 @@
           "function": "time_selected",
           "description": "The caller's chosen time is recorded with update_booking.",
           "target": "confirm",
-          "guard": "slot_selected"
+          "guard": "slot_selected",
+          "auto_after": [
+            "update_booking"
+          ]
         },
         {
           "function": "change_choices",
@@ -113,6 +98,9 @@
         "get_availability",
         "update_booking",
         "check_booking"
+      ],
+      "enter_tools": [
+        "get_availability"
       ]
     },
     {
@@ -120,7 +108,7 @@
       "task_messages": [
         {
           "role": "developer",
-          "content": "Read the appointment back in one sentence: the service, the provider, the location, the day and the time. Ask the caller to confirm. Only after a clear yes, call book_appointment with the draft revision from the latest booking result and confirmed set to true. When it returns a confirmation number, call booking_done. If the caller wants another time, or the time was just taken, call change_time. If they want a different provider, location or service, call change_choices."
+          "content": "Read the appointment back in one sentence: the service, the provider, the location, the day and the time. Ask the caller to confirm. Only after a clear yes, call book_appointment with the draft revision from the latest booking result and confirmed set to true. Once it returns a confirmation number, the step moves on by itself. If the caller wants another time, or the time was just taken, call change_time. If they want a different provider, location or service, call change_choices."
         }
       ],
       "edges": [
@@ -128,7 +116,10 @@
           "function": "booking_done",
           "description": "book_appointment returned a confirmation number.",
           "target": "success",
-          "guard": "booking_completed"
+          "guard": "booking_completed",
+          "auto_after": [
+            "book_appointment"
+          ]
         },
         {
           "function": "change_time",

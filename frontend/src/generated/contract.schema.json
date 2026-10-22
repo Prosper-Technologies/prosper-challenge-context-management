@@ -34,6 +34,18 @@
           "description": "Global role message, applied to every node.",
           "type": "string"
         },
+        "first_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Said when the call starts, without an LLM call; the initial node then waits for the caller."
+        },
         "initial_node": {
           "type": "string"
         },
@@ -73,6 +85,115 @@
         "name"
       ],
       "title": "AgentSummary",
+      "type": "object"
+    },
+    "ApplyRequestArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "patient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatientArgs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Facts the caller stated; null for one fact clears it."
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "description": "A service id from search_services.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "description": "A provider id from find_providers.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "description": "A location id from find_locations.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A slot id from get_availability that the caller picked."
+        },
+        "service_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The service the caller chose, in their words; omit service_id when using this."
+        },
+        "provider_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider the caller chose; omit provider_id when using this."
+        },
+        "location_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The location the caller chose; omit location_id when using this."
+        }
+      },
+      "title": "ApplyRequestArgs",
       "type": "object"
     },
     "AppointmentType": {
@@ -573,6 +694,13 @@
           ],
           "default": null,
           "description": "A named check that must pass before the edge is taken (see the registry)."
+        },
+        "auto_after": {
+          "description": "Node tools after which the edge is taken without an LLM call, when the call changed the state and the guard passes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -865,7 +993,8 @@
             "service_chosen",
             "booking_ready",
             "slot_selected",
-            "booking_completed"
+            "booking_completed",
+            "request_recorded"
           ],
           "type": "string"
         },
@@ -879,6 +1008,7 @@
               "search_services",
               "find_providers",
               "find_locations",
+              "apply_request",
               "update_booking",
               "check_booking",
               "get_availability",
@@ -1199,6 +1329,13 @@
         },
         "tools": {
           "description": "Registry tools the node exposes besides its edges.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enter_tools": {
+          "description": "Registry tools run without arguments when the node is entered; their results are added to the result of the transition into it.",
           "items": {
             "type": "string"
           },
@@ -1836,6 +1973,129 @@
       "title": "Ref",
       "type": "object"
     },
+    "RequestClarification": {
+      "properties": {
+        "field": {
+          "enum": [
+            "service_text",
+            "provider_text",
+            "location_text"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "ambiguous",
+            "no_match",
+            "confirm_match"
+          ],
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "type": "array"
+        },
+        "total_matches": {
+          "type": "integer"
+        },
+        "clarify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lookup_tool": {
+          "type": "string"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "query",
+        "reason",
+        "candidates",
+        "total_matches",
+        "lookup_tool",
+        "hint"
+      ],
+      "title": "RequestClarification",
+      "type": "object"
+    },
+    "RequestView": {
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DraftView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cleared": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Cleared"
+          },
+          "type": "array"
+        },
+        "clarification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestClarification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "title": "RequestView",
+      "type": "object"
+    },
     "SearchServicesArgs": {
       "additionalProperties": false,
       "properties": {
@@ -2166,6 +2426,9 @@
         "find_locations": {
           "$ref": "#/$defs/FindLocationsArgs"
         },
+        "apply_request": {
+          "$ref": "#/$defs/ApplyRequestArgs"
+        },
         "update_booking": {
           "$ref": "#/$defs/UpdateBookingArgs"
         },
@@ -2184,6 +2447,7 @@
         "search_services",
         "find_providers",
         "find_locations",
+        "apply_request",
         "update_booking",
         "check_booking",
         "get_availability",
@@ -2218,6 +2482,9 @@
         "find_locations": {
           "$ref": "#/$defs/LocationSearch"
         },
+        "apply_request": {
+          "$ref": "#/$defs/RequestView"
+        },
         "update_booking": {
           "$ref": "#/$defs/UpdateView"
         },
@@ -2236,6 +2503,7 @@
         "search_services",
         "find_providers",
         "find_locations",
+        "apply_request",
         "update_booking",
         "check_booking",
         "get_availability",
@@ -2299,6 +2567,7 @@
             "search_services",
             "find_providers",
             "find_locations",
+            "apply_request",
             "update_booking",
             "check_booking",
             "get_availability",

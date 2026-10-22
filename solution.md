@@ -45,6 +45,8 @@ Provider, service and location compatibility, referrals, new-patient eligibility
 **2. A guided narrowing loop instead of free-form search.**
 `update_booking` records choices and returns `next_question` and at most three feasible options. The order is fixed: service first, then any patient fact a remaining option depends on (referral, then new-patient status), then provider, then location. For a knee MRI with an existing patient, the provider question lists exactly the two valid provider/location combinations.
 
+The current scheduler also exposes `apply_request`, which combines name lookup and the draft update in one model tool call. It resolves all supplied names before applying a single update through the same session logic. Multiple matches and weak matches require clarification; nothing changes until the caller's choices are resolved. Identity lookup does not filter by booking policy, so a named but incompatible choice is recorded and explained rather than replaced. The existing automatic transition then fetches availability when the draft becomes ready. The benchmark below predates this optimization; a scripted graph test demonstrates two fewer model calls for one booking path, but live cost and accuracy still need measurement.
+
 - Patient facts are **true, false or unknown**. An unknown fact becomes a *condition* on an option rather than a pass or a fail, and a fact is asked only when it changes the result. Treating a missing value as false would classify an unknown caller as an existing patient.
 - The engine never picks for the caller, even when only one option is left.
 

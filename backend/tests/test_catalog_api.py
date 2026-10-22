@@ -264,11 +264,12 @@ def test_voice_http_and_evaluation_adapters_give_the_same_results(client):
     HTTP (a playground session) and the evaluation (the compiled graph driven as
     text) give the same results, refusals included, and leave the same session."""
     calls = [
-        ("search_services", {"query": "knee MRI"}),
+        ("apply_request", {"service_text": "knee MRI", "provider_text": "Chen"}),  # clarification, no update
         ("find_providers", {"name": "Dr. Chen"}),
         ("update_booking", {"provider_id": "prov_999"}),
         ("get_availability", {"day": "not a date"}),
-        ("update_booking", MRI),
+        ("apply_request", {"service_text": "knee MRI", "provider_id": MRI["provider_id"],
+                           "location_text": "Downtown", "patient": MRI["patient"]}),
         ("get_availability", {"part_of_day": "afternoon"}),
         ("update_booking", {"location_id": "loc_001"}),
         ("check_booking", {}),

@@ -6,7 +6,7 @@
 #           ToolContext (the caller's session, a calendar and the index)
 #   Guard   a named check on the session that a graph edge can require before it
 #           transitions (service_chosen, booking_ready, slot_selected,
-#           booking_completed)
+#           booking_completed, request_recorded), given the edge's arguments
 #
 # Adapters call `Tool.run(ctx, raw_args)` and get JSON back. Arguments are validated
 # by the argument models only, and every failure is a structured `{"error": {...}}`
@@ -19,7 +19,7 @@
 # default (no hint, nothing excluded, not truncated) are left out of the JSON.
 #
 # Searches never write to the session; get_availability records the times it
-# offers; update_booking and book_appointment own every other change.
+# offers; apply_request, update_booking and book_appointment own every other change.
 #
 
 import json
@@ -111,6 +111,21 @@ class UpdateBookingArgs(_Args):
     provider_id: Optional[ProviderId] = None
     location_id: Optional[LocationId] = None
     slot_id: Optional[str] = Field(None, description="A slot id from get_availability that the caller picked.")
+
+
+class ApplyRequestArgs(UpdateBookingArgs):
+    service_text: Optional[str] = Field(
+        None, min_length=1, max_length=200,
+        description="The service the caller chose, in their words; omit service_id when using this.",
+    )
+    provider_text: Optional[str] = Field(
+        None, min_length=1, max_length=200,
+        description="The provider the caller chose; omit provider_id when using this.",
+    )
+    location_text: Optional[str] = Field(
+        None, min_length=1, max_length=200,
+        description="The location the caller chose; omit location_id when using this.",
+    )
 
 
 class CheckBookingArgs(_Args):
@@ -253,6 +268,28 @@ class UpdateView(BookingView):
     cleared: tuple[Cleared, ...] = ()
 
 
+class RequestClarification(_Out):
+    field: Literal["service_text", "provider_text", "location_text"]
+    query: str
+    reason: Literal["ambiguous", "no_match", "confirm_match"]
+    candidates: tuple[Ref, ...]
+    total_matches: int
+    clarify: Optional[str] = None
+    lookup_tool: str
+    next_cursor: Optional[str] = None
+    hint: str
+
+
+class RequestView(_Out):
+    changed: bool
+    # Clarification is not a failed tool call. No draft is returned in that case:
+    # an earlier ready draft must not be mistaken for the caller's new request.
+    draft: Optional[DraftView] = None
+    check: Optional[StatusView] = None
+    cleared: tuple[Cleared, ...] = ()
+    clarification: Optional[RequestClarification] = None
+
+
 class Availability(_Out):
     revision: int
     today: str
@@ -348,14 +385,14 @@ class Tool:
 class Guard:
     name: str
     description: str
-    check: Callable[[SchedulingSession], Optional[str]]  # why the edge can't be taken yet
+    check: Callable[[SchedulingSession, dict], Optional[str]]  # why the edge can't be taken yet
     # Agents exposing any of these tools must end only through this guard (see
     # agent_builder.registry.GuardBinding).
     completes: tuple[str, ...] = ()
 
-    def run(self, session: SchedulingSession) -> Optional[dict]:
-        """None if the edge may be taken, else what's missing and how to recover."""
-        message = self.check(session)
+    def run(self, session: SchedulingSession, args: Optional[dict] = None) -> Optional[dict]:
+        """None if the edge may be taken with these arguments, else what's missing and how to recover."""
+        message = self.check(session, args or {})
         if message is None:
             return None
         narrowing = session.check()
@@ -479,6 +516,66 @@ def find_locations(ctx: ToolContext, args: FindLocationsArgs) -> LocationSearch:
 # ---- handlers: the booking --------------------------------------------------------
 
 
+def apply_request(ctx: ToolContext, args: ApplyRequestArgs) -> RequestView:
+    """Resolve explicit choices, then make one atomic session update.
+
+    Search without policy filters: identity must not change just because the
+    requested combination is unbookable. Weak matches require the caller to
+    confirm a candidate; any unresolved field leaves the entire request untouched.
+    """
+    data = args.model_dump(exclude_unset=True)
+    lookups = (
+        ("service", ctx.index.services, "search_services"),
+        ("provider", ctx.index.providers, "find_providers"),
+        ("location", ctx.index.locations, "find_locations"),
+    )
+    conflicts = tuple(
+        ArgError(path=[f"{field}_text"], message=f"Supply {field}_text or {field}_id, not both.")
+        for field, _, _ in lookups
+        if f"{field}_text" in data and f"{field}_id" in data
+    )
+    if conflicts:
+        raise ToolError("INVALID_ARGUMENTS", "Nothing was changed.", errors=conflicts)
+    _check_ids(ctx, **{f"{field}_id": data.get(f"{field}_id") for field, _, _ in lookups})
+    for field, search, tool_name in lookups:
+        text_field = f"{field}_text"
+        if text_field not in data:
+            continue
+        query = data.pop(text_field)
+        if query is None:
+            data[f"{field}_id"] = None
+            continue
+        result = search(query, limit=3)
+        if result.total_matches == 1 and result.matches[0].tier in {"exact", "alias", "tokens"}:
+            data[f"{field}_id"] = result.matches[0].id
+            continue
+        candidates = []
+        for match in result.matches:
+            label = match.name
+            if field == "provider":
+                provider = ctx.catalog.provider_by_id[match.id]
+                places = ", ".join(ctx.catalog.location_by_id[i].name for i in provider.location_ids)
+                label = f"{_provider_label(provider)} at {places}"
+            elif field == "service":
+                label = f"{label} ({ctx.catalog.type_by_id[match.id].specialty})"
+            candidates.append(Ref(id=match.id, name=label))
+        reason = "no_match" if not result.matches else "ambiguous" if result.total_matches > 1 else "confirm_match"
+        return RequestView(
+            changed=False,
+            clarification=RequestClarification(
+                field=text_field, query=query, reason=reason,
+                candidates=tuple(candidates), total_matches=result.total_matches,
+                clarify=result.clarify, lookup_tool=tool_name, next_cursor=result.next_cursor,
+                hint=(
+                    "Nothing changed. Ask the caller to clarify or confirm; retry apply_request with all original "
+                    "fields, replacing this text with the chosen ID or clarified text. Use lookup_tool for more matches."
+                ),
+            ),
+        )
+    result = update_booking(ctx, UpdateBookingArgs.model_validate(data))
+    return RequestView(**result.model_dump())
+
+
 def update_booking(ctx: ToolContext, args: UpdateBookingArgs) -> UpdateView:
     data = args.model_dump(exclude_unset=True)
     if data.get("patient", {}) is None:
@@ -541,13 +638,13 @@ def book_appointment(ctx: ToolContext, args: BookAppointmentArgs) -> ReceiptView
 # ---- guards -----------------------------------------------------------------------
 
 
-def _service_chosen(session: SchedulingSession) -> Optional[str]:
+def _service_chosen(session: SchedulingSession, args: dict) -> Optional[str]:
     if session.state.draft.service_id is None:
         return "No service is recorded: record the caller's choice with update_booking first."
     return None
 
 
-def _booking_ready(session: SchedulingSession) -> Optional[str]:
+def _booking_ready(session: SchedulingSession, args: dict) -> Optional[str]:
     narrowing = session.check()
     if narrowing.status == "ready":
         return None
@@ -556,18 +653,30 @@ def _booking_ready(session: SchedulingSession) -> Optional[str]:
     return f"The booking isn't ready yet. {narrowing.next_question.prompt}"
 
 
-def _slot_selected(session: SchedulingSession) -> Optional[str]:
-    if (problem := _booking_ready(session)) is not None:
+def _slot_selected(session: SchedulingSession, args: dict) -> Optional[str]:
+    if (problem := _booking_ready(session, args)) is not None:
         return problem
     if session.selected_slot() is None:
         return "No offered time is selected: call get_availability, then record the caller's pick with update_booking."
     return None
 
 
-def _booking_completed(session: SchedulingSession) -> Optional[str]:
+def _booking_completed(session: SchedulingSession, args: dict) -> Optional[str]:
     if session.state.reservation is None:
         return "Nothing is booked yet: call book_appointment once the caller confirms."
     return None
+
+
+def _request_recorded(session: SchedulingSession, args: dict) -> Optional[str]:
+    # A handoff because something can't be booked must leave the reason on file:
+    # staff (and the evaluation) see the blocked draft, not the conversation.
+    if args.get("staff_requested") is True or session.check().status == "blocked":
+        return None
+    return (
+        "Nothing recorded is blocked yet. If the caller asked for something that can't be booked, record it "
+        "with update_booking first (even if it won't work): the result says why and what to offer. If the "
+        "caller asked for a person, call this again with staff_requested true."
+    )
 
 
 # ---- definitions ------------------------------------------------------------------
@@ -606,6 +715,15 @@ TOOLS: dict[str, Tool] = {
             FindLocationsArgs,
             LocationSearch,
             find_locations,
+        ),
+        Tool(
+            "apply_request",
+            "Resolve the caller's chosen service, provider and location by name and record them with facts in one "
+            "atomic update. For booking requests, not browsing. Clarification changes nothing: retry all fields "
+            "after the caller chooses.",
+            ApplyRequestArgs,
+            RequestView,
+            apply_request,
         ),
         Tool(
             "update_booking",
@@ -652,6 +770,11 @@ GUARDS: dict[str, Guard] = {
             "The appointment is booked and has a confirmation number.",
             _booking_completed,
             completes=("book_appointment",),
+        ),
+        Guard(
+            "request_recorded",
+            "The caller asked for staff, or what they asked for is recorded and can't be booked.",
+            _request_recorded,
         ),
     )
 }

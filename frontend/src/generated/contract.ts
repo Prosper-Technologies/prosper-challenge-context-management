@@ -39,6 +39,10 @@ export interface AgentConfig {
    * Global role message, applied to every node.
    */
   persona?: string;
+  /**
+   * Said when the call starts, without an LLM call; the initial node then waits for the caller.
+   */
+  first_message?: string | null;
   initial_node: string;
   nodes: Node[];
   [k: string]: unknown;
@@ -67,6 +71,10 @@ export interface Node {
    * Registry tools the node exposes besides its edges.
    */
   tools?: string[];
+  /**
+   * Registry tools run without arguments when the node is entered; their results are added to the result of the transition into it.
+   */
+  enter_tools?: string[];
   pre_actions?: (TtsSayAction | EndConversationAction | Action)[];
   post_actions?: (TtsSayAction | EndConversationAction | Action)[];
   /**
@@ -117,6 +125,10 @@ export interface Edge {
    * A named check that must pass before the edge is taken (see the registry).
    */
   guard?: string | null;
+  /**
+   * Node tools after which the edge is taken without an LLM call, when the call changed the state and the guard passes.
+   */
+  auto_after?: string[];
   [k: string]: unknown;
 }
 /**
@@ -176,6 +188,49 @@ export interface Position {
 export interface AgentSummary {
   id: string;
   name: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "ApplyRequestArgs".
+ */
+export interface ApplyRequestArgs {
+  /**
+   * Facts the caller stated; null for one fact clears it.
+   */
+  patient?: PatientArgs | null;
+  service_id?: string | null;
+  provider_id?: string | null;
+  location_id?: string | null;
+  /**
+   * A slot id from get_availability that the caller picked.
+   */
+  slot_id?: string | null;
+  /**
+   * The service the caller chose, in their words; omit service_id when using this.
+   */
+  service_text?: string | null;
+  /**
+   * The provider the caller chose; omit provider_id when using this.
+   */
+  provider_text?: string | null;
+  /**
+   * The location the caller chose; omit location_id when using this.
+   */
+  location_text?: string | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "PatientArgs".
+ */
+export interface PatientArgs {
+  /**
+   * True if the caller has never been seen at our clinics.
+   */
+  is_new_patient?: boolean | null;
+  /**
+   * Whether a referral is on file for the service.
+   */
+  has_referral?: boolean | null;
 }
 /**
  * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
@@ -477,13 +532,14 @@ export interface FindProvidersArgs {
  * via the `definition` "GuardSpec".
  */
 export interface GuardSpec {
-  name: "service_chosen" | "booking_ready" | "slot_selected" | "booking_completed";
+  name: "service_chosen" | "booking_ready" | "slot_selected" | "booking_completed" | "request_recorded";
   description: string;
   completes: (
     | "catalog_overview"
     | "search_services"
     | "find_providers"
     | "find_locations"
+    | "apply_request"
     | "update_booking"
     | "check_booking"
     | "get_availability"
@@ -585,20 +641,6 @@ export interface OverviewArgs {
   cursor?: string | null;
 }
 /**
- * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
- * via the `definition` "PatientArgs".
- */
-export interface PatientArgs {
-  /**
-   * True if the caller has never been seen at our clinics.
-   */
-  is_new_patient?: boolean | null;
-  /**
-   * Whether a referral is on file for the service.
-   */
-  has_referral?: boolean | null;
-}
-/**
  * What the caller has told us about themselves. None means not known yet.
  *
  * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
@@ -685,6 +727,32 @@ export interface ReceiptView {
 }
 /**
  * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "RequestClarification".
+ */
+export interface RequestClarification {
+  field: "service_text" | "provider_text" | "location_text";
+  query: string;
+  reason: "ambiguous" | "no_match" | "confirm_match";
+  candidates: Ref[];
+  total_matches: number;
+  clarify?: string | null;
+  lookup_tool: string;
+  next_cursor?: string | null;
+  hint: string;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
+ * via the `definition` "RequestView".
+ */
+export interface RequestView {
+  changed: boolean;
+  draft?: DraftView | null;
+  check?: StatusView | null;
+  cleared?: Cleared[];
+  clarification?: RequestClarification | null;
+}
+/**
+ * This interface was referenced by `AgentBuilderContract`'s JSON-Schema
  * via the `definition` "SearchServicesArgs".
  */
 export interface SearchServicesArgs {
@@ -734,6 +802,7 @@ export interface ToolArgs {
   search_services: SearchServicesArgs;
   find_providers: FindProvidersArgs;
   find_locations: FindLocationsArgs;
+  apply_request: ApplyRequestArgs;
   update_booking: UpdateBookingArgs;
   check_booking: CheckBookingArgs;
   get_availability: AvailabilityArgs;
@@ -772,6 +841,7 @@ export interface ToolResults {
   search_services: ServiceSearch;
   find_providers: ProviderSearch;
   find_locations: LocationSearch;
+  apply_request: RequestView;
   update_booking: UpdateView;
   check_booking: BookingView;
   get_availability: Availability;
@@ -821,6 +891,7 @@ export interface ToolSpec {
     | "search_services"
     | "find_providers"
     | "find_locations"
+    | "apply_request"
     | "update_booking"
     | "check_booking"
     | "get_availability"

@@ -178,6 +178,8 @@ class _GraphCheck:
 
         if not config.nodes:
             self.add("error", ["nodes"], "The agent has no nodes.")
+        if config.first_message is not None and not config.first_message.strip():
+            self.add("warning", ["first_message"], "The first message is empty, so the call starts in silence.")
         if config.initial_node not in names:
             self.add(
                 "error",
@@ -242,6 +244,7 @@ class _GraphCheck:
         for j, edge in enumerate(node.edges):
             self._edge(path + ["edges", j], node, edge, names, functions)
         self._tools(path, node, functions)
+        self._enter_tools(path, node)
 
         for field in ("pre_actions", "post_actions"):
             for k, action in enumerate(getattr(node, field)):
@@ -269,6 +272,22 @@ class _GraphCheck:
 
         if edge.guard is not None and edge.guard not in self.registry.guards:
             self.add("error", path + ["guard"], f"Unknown guard '{edge.guard}'.", **context)
+
+        if edge.auto_after and edge.guard is None:
+            self.add(
+                "error",
+                path + ["auto_after"],
+                "An automatic edge needs a guard; without one it's taken after every listed tool call.",
+                **context,
+            )
+        for k, tool in enumerate(edge.auto_after):
+            if tool not in node.tools:
+                self.add(
+                    "error",
+                    path + ["auto_after", k],
+                    f"'{tool}' isn't one of this node's tools, so it can't trigger the edge.",
+                    **context,
+                )
 
         for prop_name in edge.properties:
             if prop_name in self.registry.state_keys:
@@ -308,6 +327,26 @@ class _GraphCheck:
             elif tool in functions:
                 self.add("error", where, f"Tool '{tool}' has the same name as an edge function.", node=node.name)
             seen.add(tool)
+
+    def _enter_tools(self, path, node) -> None:
+        seen: set[str] = set()
+        for k, name in enumerate(node.enter_tools):
+            where = path + ["enter_tools", k]
+            tool = self.registry.tools.get(name)
+            if tool is None:
+                self.add("error", where, f"Unknown tool '{name}'.", node=node.name)
+            elif name in seen:
+                self.add("error", where, f"Tool '{name}' is listed twice.", node=node.name)
+            elif tool.required:
+                self.add("error", where, f"Tool '{name}' needs arguments, so it can't run on entry.", node=node.name)
+            elif node.name == self.config.initial_node:
+                self.add(
+                    "error",
+                    where,
+                    "Entry tools run on a transition, and the initial node isn't entered through one.",
+                    node=node.name,
+                )
+            seen.add(name)
 
     def _completion_guards(self) -> None:
         """An agent that can book must end in success only through the guard that
