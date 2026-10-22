@@ -89,6 +89,19 @@ describe("export", () => {
     expect(state().notice?.text).toMatch(/Bad value/);
   });
 
+  it("keeps node tools and edge guards set through the inspector's actions", async () => {
+    state().edit((doc) => d.setNodeTools(doc, 1, ["search_services", "update_booking"]));
+    state().edit((doc) => d.setEdgeGuard(doc, 1, 0, "booking_ready"));
+    const file = await exportAgent();
+    const exported = JSON.parse(file!.text);
+    expect(exported.nodes[1].tools).toEqual(["search_services", "update_booking"]);
+    expect(exported.nodes[1].edges[0].guard).toBe("booking_ready");
+
+    state().markSaved(state().doc!); // so the import doesn't ask to discard the edits
+    await importAgent(file!.fileName, file!.text, ok);
+    expect(state().doc).toEqual(exported);
+  });
+
   it("exports a malformed document's text as is", async () => {
     state().open("broken", { raw: "{ not json" }, false);
     expect((await exportAgent())?.text).toBe("{ not json");

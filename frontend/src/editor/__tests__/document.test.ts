@@ -78,6 +78,39 @@ describe("addNode and moveNodes", () => {
   });
 });
 
+describe("node tools and edge guards", () => {
+  it("sets a node's tools, deduplicated, and removes the field when empty", () => {
+    let doc = d.setNodeTools(agent(), 1, ["search_services", "update_booking", "search_services"]);
+    expect(doc.nodes[1].tools).toEqual(["search_services", "update_booking"]);
+    expect(d.setNodeTools(doc, 1, ["search_services", "update_booking"])).toBe(doc);
+    doc = d.setNodeTools(doc, 1, []);
+    expect("tools" in doc.nodes[1]).toBe(false);
+    const same = agent();
+    expect(d.setNodeTools(same, 0, [])).toBe(same);
+  });
+
+  it("toggles one tool, keeping the others' order and names it doesn't know", () => {
+    expect(d.withTool(undefined, "check_booking", true)).toEqual(["check_booking"]);
+    expect(d.withTool(["x_custom", "check_booking"], "find_providers", true)).toEqual([
+      "x_custom",
+      "check_booking",
+      "find_providers",
+    ]);
+    expect(d.withTool(["x_custom", "check_booking"], "check_booking", false)).toEqual(["x_custom"]);
+    expect(d.withTool(["check_booking"], "check_booking", true)).toEqual(["check_booking"]);
+  });
+
+  it("sets and clears an edge guard, keeping the edge's other fields", () => {
+    const doc = d.setEdgeGuard(agent(), 0, 0, "booking_ready");
+    const edge = doc.nodes[0].edges![0];
+    expect(edge.guard).toBe("booking_ready");
+    expect(edge.properties).toEqual(agent().nodes[0].edges![0].properties);
+    expect(d.setEdgeGuard(doc, 0, 0, "booking_ready")).toBe(doc);
+    expect("guard" in d.setEdgeGuard(doc, 0, 0, null).nodes[0].edges![0]).toBe(false);
+    expect(() => d.setEdgeGuard(doc, 0, 5, "x")).toThrow(d.EditError);
+  });
+});
+
 describe("form edits preserve what they don't show", () => {
   it("keeps message roles and extra fields", () => {
     const doc = d.setMessageContent(agent(), 0, 0, "Say hello.");

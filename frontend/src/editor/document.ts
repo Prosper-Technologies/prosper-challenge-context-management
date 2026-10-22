@@ -112,6 +112,25 @@ export function updateNode(doc: AgentConfig, i: number, patch: NodePatch): Agent
   return mapNode(doc, i, (node) => assign(node, patch));
 }
 
+/** Set the catalog tools a node exposes (deduplicated, in the given order); an
+ * empty list removes the field. Names aren't checked here: the validator knows
+ * the registry. */
+export function setNodeTools(doc: AgentConfig, i: number, tools: string[]): AgentConfig {
+  const next = [...new Set(tools)];
+  return mapNode(doc, i, (node) => {
+    const current = node.tools ?? [];
+    if (next.length === current.length && next.every((t, k) => t === current[k])) return node;
+    return assign(node, { tools: next.length ? next : undefined });
+  });
+}
+
+/** `tools` with `name` added (at the end) or removed, keeping the others' order. */
+export function withTool(tools: string[] | undefined, name: string, enabled: boolean): string[] {
+  const current = tools ?? [];
+  if (enabled) return current.includes(name) ? current : [...current, name];
+  return current.filter((t) => t !== name);
+}
+
 /** Rename a node and every reference to it (edge targets, the initial node). */
 export function renameNode(doc: AgentConfig, i: number, name: string): AgentConfig {
   const old = doc.nodes[i]?.name;
@@ -283,6 +302,16 @@ export type EdgePatch = Patch<Pick<Edge, "description" | "target">>;
 
 export function updateEdge(doc: AgentConfig, i: number, j: number, patch: EdgePatch): AgentConfig {
   return mapEdge(doc, i, j, (edge) => assign(edge, patch));
+}
+
+/** Set or (with null/"") remove the named guard an edge checks before transitioning. */
+export function setEdgeGuard(
+  doc: AgentConfig,
+  i: number,
+  j: number,
+  guard: string | null,
+): AgentConfig {
+  return mapEdge(doc, i, j, (edge) => assign(edge, { guard: guard || undefined }));
 }
 
 export function renameFunction(doc: AgentConfig, i: number, j: number, name: string): AgentConfig {

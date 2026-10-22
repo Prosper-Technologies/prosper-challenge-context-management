@@ -159,18 +159,20 @@ export function JsonField<T>({
 
 export function SelectField({
   label,
+  hint,
   value,
   options,
   onChange,
 }: {
   label: string;
+  hint?: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
 }) {
   const locked = useEditor((s) => s.locked);
   return (
-    <Label label={label}>
+    <Label label={label} hint={hint}>
       <select
         className={inputClass}
         value={value}
@@ -189,25 +191,33 @@ export function SelectField({
 
 export function Checkbox({
   label,
+  hint,
   checked,
   onChange,
+  mono = false,
 }: {
   label: string;
+  hint?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  mono?: boolean;
 }) {
   const locked = useEditor((s) => s.locked);
   const id = useId();
   return (
-    <span className="flex items-center gap-2 text-sm">
+    <span className="flex items-start gap-2 text-sm">
       <input
         id={id}
         type="checkbox"
+        className="mt-1"
         checked={checked}
         disabled={locked}
         onChange={(e) => onChange(e.target.checked)}
       />
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id} className="min-w-0">
+        <span className={mono ? "font-mono text-xs" : ""}>{label}</span>
+        {hint && <span className="block text-[11px] text-slate-400">{hint}</span>}
+      </label>
     </span>
   );
 }
@@ -244,7 +254,45 @@ export function Button({
   );
 }
 
-/** Issues as a clickable list; clicking selects what the issue points at. */
+/** Issues as a list of buttons, each with an optional short label (what it's
+ * about). What a click does is the caller's: agent issues select a node or edge,
+ * catalog lint navigates to a record. */
+export function IssueRows<T extends { level: "error" | "warning"; message: string }>({
+  issues,
+  label,
+  onIssueClick,
+}: {
+  issues: T[];
+  label?: (issue: T) => string | null;
+  onIssueClick: (issue: T) => void;
+}) {
+  if (issues.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-1">
+      {issues.map((issue, k) => {
+        const text = label?.(issue);
+        return (
+          <li key={k}>
+            <button
+              type="button"
+              className={`w-full rounded px-2 py-1 text-left text-xs ${
+                issue.level === "error" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"
+              }`}
+              onClick={() => onIssueClick(issue)}
+            >
+              {text && <span className="mr-1 font-mono text-[11px] opacity-70">{text}</span>}
+              {issue.message}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const agentIssueLabel = (issue: Issue) => [issue.node, issue.edge].filter(Boolean).join(" › ") || null;
+
+/** Agent issues; clicking selects what the issue points at. */
 export function IssueList({
   issues,
   onSelect,
@@ -253,28 +301,12 @@ export function IssueList({
   onSelect?: (selection: Selection) => void;
 }) {
   const select = useEditor((s) => s.select);
-  if (issues.length === 0) return null;
   return (
-    <ul className="flex flex-col gap-1">
-      {issues.map((issue, k) => (
-        <li key={k}>
-          <button
-            type="button"
-            className={`w-full rounded px-2 py-1 text-left text-xs ${
-              issue.level === "error" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"
-            }`}
-            onClick={() => (onSelect ?? select)(issueSelection(issue))}
-          >
-            {(issue.node || issue.edge) && (
-              <span className="mr-1 font-mono text-[11px] opacity-70">
-                {[issue.node, issue.edge].filter(Boolean).join(" › ")}
-              </span>
-            )}
-            {issue.message}
-          </button>
-        </li>
-      ))}
-    </ul>
+    <IssueRows
+      issues={issues}
+      label={agentIssueLabel}
+      onIssueClick={(issue) => (onSelect ?? select)(issueSelection(issue))}
+    />
   );
 }
 

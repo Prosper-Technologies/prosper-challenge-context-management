@@ -2,7 +2,8 @@
 // become document actions (connect, delete, a finished drag) or transient state
 // (selection, in-progress drag positions, measured sizes). A drag commits once,
 // on drop, so it is a single undo step and never triggers validation. "Tidy
-// layout" re-lays out every node as one step.
+// layout" re-lays out every node as one step. A node's badge counts the catalog
+// tools it exposes.
 
 import {
   Background,
@@ -31,7 +32,9 @@ const nodeTypes = { agent: memo(AgentNode) };
 
 type Size = { width: number; height: number };
 
-export default function Canvas() {
+/** `active`: the agents screen is showing. React Flow listens for Delete on the
+ * whole document, so a hidden canvas must not delete its selection. */
+export default function Canvas({ active }: { active: boolean }) {
   const doc = useEditor((s) => s.doc)!;
   const selection = useEditor((s) => s.selection);
   const locked = useEditor((s) => s.locked);
@@ -153,7 +156,7 @@ export default function Canvas() {
       onPaneClick={() => select({ kind: "agent" })}
       nodesDraggable={!locked}
       nodesConnectable={!locked}
-      deleteKeyCode={locked ? null : ["Backspace", "Delete"]}
+      deleteKeyCode={locked || !active ? null : ["Backspace", "Delete"]}
       multiSelectionKeyCode={null}
       selectionKeyCode={null}
       fitView
@@ -206,6 +209,7 @@ function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {
   const visited = useEditor((s) => s.trace.nodes.has(name));
   if (!node) return null;
 
+  const tools = node.tools?.length ?? 0;
   const task = node.task_messages?.find((m) => typeof m.content === "string")?.content;
   const border = active
     ? "border-emerald-600 ring-4 ring-emerald-200"
@@ -235,14 +239,22 @@ function AgentNode({ data, selected }: NodeProps<AgentFlowNode>) {
           </span>
         )}
         <span className="truncate font-medium">{name}</span>
-        {level && (
-          <span
-            title={level === "error" ? "Has errors" : "Has warnings"}
-            className={`ml-auto h-2.5 w-2.5 shrink-0 rounded-full ${
-              level === "error" ? "bg-red-500" : "bg-amber-400"
-            }`}
-          />
-        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {tools > 0 && (
+            <span
+              title={node.tools!.join(", ")}
+              className="rounded bg-sky-100 px-1.5 text-[10px] font-medium text-sky-800"
+            >
+              {tools} tool{tools > 1 ? "s" : ""}
+            </span>
+          )}
+          {level && (
+            <span
+              title={level === "error" ? "Has errors" : "Has warnings"}
+              className={`h-2.5 w-2.5 rounded-full ${level === "error" ? "bg-red-500" : "bg-amber-400"}`}
+            />
+          )}
+        </span>
       </div>
       <p className="mt-1 line-clamp-2 text-xs text-slate-500">
         {typeof task === "string" && task ? task : <span className="italic">No task yet</span>}

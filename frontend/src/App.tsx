@@ -1,19 +1,28 @@
-// The builder: agent list | canvas (or JSON view) | inspector | test call.
+// The builder: agent list | canvas (or JSON view) | inspector | test call, and
+// the catalog screen beside it.
 //
 // The document lives in the editor store (editor/store.ts); this shell wires up
 // loading (and the backend-down and no-agents states), live validation, keyboard
 // shortcuts and the test call, whose lock and node trace flow back into the store.
+//
+// The agents/catalog switch is local state here. The call, its audio and its
+// panel sit above the switch, so a call carries on across it. The editor stays
+// mounted (hidden and inert) while the catalog shows, so field buffers that
+// haven't committed, or can't, are still there on the way back; its shortcuts and
+// the canvas's Delete key only act on the agents screen. The catalog screen
+// mounts on first visit and then stays, keeping its playground session.
 
 import { ReactFlowProvider } from "@xyflow/react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import AgentList from "./components/AgentList";
 import CallPanel, { useCallLock } from "./components/CallPanel";
 import Canvas from "./components/Canvas";
+import CatalogView from "./components/CatalogView";
 import Inspector from "./components/Inspector";
 import JsonView from "./components/JsonView";
 import { Button } from "./components/fields";
-import TopBar, { ImportButton } from "./components/TopBar";
+import TopBar, { ImportButton, type Screen } from "./components/TopBar";
 import {
   type CallRefusal,
   newAgent,
@@ -45,9 +54,13 @@ function useLiveValidation() {
   }, []);
 }
 
-function useShortcuts() {
+/** Editor shortcuts, only while the editor is showing (`active`). */
+function useShortcuts(active: boolean) {
+  const enabled = useRef(active);
+  enabled.current = active;
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!enabled.current) return;
       const shortcut = shortcutFor(e, isTextField(e.target));
       if (!shortcut) return;
       e.preventDefault(); // e.g. the browser's own "Save page"
@@ -100,6 +113,9 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [refusal, setRefusal] = useState<CallRefusal | null>(null);
   const [starting, setStarting] = useState(false);
+  const [screen, setScreen] = useState<Screen>("agents");
+  const [catalogVisited, setCatalogVisited] = useState(false);
+  const editing = screen === "agents";
 
   const agentId = useEditor((s) => s.agentId);
   const doc = useEditor((s) => s.doc);
@@ -109,7 +125,7 @@ export default function App() {
 
   useLiveValidation();
   useCallLock(call);
-  useShortcuts();
+  useShortcuts(editing);
   const load = useInitialLoad();
 
   // Info notices clear themselves; errors stay until dismissed or replaced.
@@ -118,6 +134,11 @@ export default function App() {
     const timer = setTimeout(() => editorStore.getState().notify(null), 6000);
     return () => clearTimeout(timer);
   }, [notice]);
+
+  const switchScreen = (next: Screen) => {
+    if (next === "catalog") setCatalogVisited(true);
+    setScreen(next);
+  };
 
   const start = async () => {
     setPanelOpen(true);
@@ -130,7 +151,11 @@ export default function App() {
   return (
     <ReactFlowProvider>
       <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
-        <TopBar onTestCall={() => (call.status === "idle" ? void start() : setPanelOpen(true))} />
+        <TopBar
+          screen={screen}
+          onScreen={switchScreen}
+          onTestCall={() => (call.status === "idle" ? void start() : setPanelOpen(true))}
+        />
         {notice && (
           <div
             role={notice.kind === "error" ? "alert" : "status"}
@@ -150,23 +175,32 @@ export default function App() {
           </div>
         )}
         <div className="flex min-h-0 flex-1">
-          <AgentList />
-          <main className="relative min-w-0 flex-1">
-            {load.error && !agentId ? (
-              <BackendDown error={load.error} onRetry={load.retry} />
-            ) : !agentId ? (
-              <EmptyState />
-            ) : showCanvas ? (
-              <Canvas key={agentId} />
-            ) : (
-              <JsonView key={agentId} />
+          <div className="relative min-w-0 flex-1">
+            <div className={`absolute inset-0 flex ${editing ? "" : "invisible"}`} inert={!editing}>
+              <AgentList />
+              <main className="relative min-w-0 flex-1">
+                {load.error && !agentId ? (
+                  <BackendDown error={load.error} onRetry={load.retry} />
+                ) : !agentId ? (
+                  <EmptyState />
+                ) : showCanvas ? (
+                  <Canvas key={agentId} active={editing} />
+                ) : (
+                  <JsonView key={agentId} />
+                )}
+              </main>
+              {doc && (
+                <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4">
+                  <Inspector />
+                </aside>
+              )}
+            </div>
+            {catalogVisited && (
+              <div className={`absolute inset-0 bg-slate-50 ${editing ? "invisible" : ""}`} inert={editing}>
+                <CatalogView />
+              </div>
             )}
-          </main>
-          {doc && (
-            <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4">
-              <Inspector />
-            </aside>
-          )}
+          </div>
           {panelOpen && (
             <CallPanel
               call={call}

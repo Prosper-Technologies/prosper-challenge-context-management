@@ -94,7 +94,7 @@ export function agentIssues(issues: Issue[]): Issue[] {
   return issues.filter((x) => x.path[0] !== "nodes" || typeof x.path[1] !== "number");
 }
 
-export function worstLevel(issues: Issue[]): "error" | "warning" | null {
+export function worstLevel(issues: Pick<Issue, "level">[]): "error" | "warning" | null {
   if (issues.some((x) => x.level === "error")) return "error";
   return issues.length > 0 ? "warning" : null;
 }

@@ -2,7 +2,7 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
-The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, and [Milestone 7](#milestone-7-api-and-contract) the catalog API; the UI and benchmark (M8–M9) are still to come.
+The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, [Milestone 7](#milestone-7-api-and-contract) the catalog API, and [Milestone 8](#milestone-8-frontend) the catalog screen and the editor's tool and guard controls; the benchmark (M9) is still to come.
 
 ## Milestone 1: browser integration
 
@@ -256,7 +256,7 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 ## Phase 2: context-management design
 
-Status: M5 (the catalog domain), M6 (tools and builder integration) and M7 (the catalog API) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M8–M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) are proposed. No Phase 2 performance or accuracy results have been measured yet.
+Status: M5 (the catalog domain), M6 (tools and builder integration), M7 (the catalog API) and M8 (the frontend) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) is proposed. No Phase 2 performance or accuracy results have been measured yet.
 
 ### Deterministic catalog rules, conversational interpretation
 
@@ -482,3 +482,52 @@ The schema now covers the catalog, lint issues, the tool and guard metadata, pla
 ### Not done in M7
 
 The frontend doesn't call these routes yet (M8).
+
+## Milestone 8: frontend
+
+The top bar switches between the **Agents** screen (the builder) and a **Catalog** screen: the catalog as tables, its lint, and a tool playground. The node inspector gains a Tools section, the edge inspector a guard selector, and canvas nodes an "N tools" badge. No backend code changed.
+
+### Switching screens keeps the editor alive
+
+The switch is local state in `App`. Both screens stay mounted once visited, stacked in one container; the hidden one is `invisible` and `inert`. The call, its `<audio>` element and the call panel sit outside that container, so a call keeps playing and its controls stay on screen while you browse the catalog. The top bar keeps an "In call…" button on the catalog screen during a call.
+
+- **Why retain rather than block:** a field whose commit was rejected (a rename that collides, malformed JSON) keeps its text and error in component state. Unmounting would lose it; blocking navigation until it's fixed would trap you in the editor. Keeping the subtree means you come back to exactly what you left, and Save still refuses until the buffer commits.
+- `visibility: hidden` rather than `display: none` keeps the canvas's measured node sizes; React Flow would otherwise see zero-sized nodes.
+- **Shortcuts are scoped.** `useShortcuts` ignores keys unless the agents screen shows, so ⌘S/⌘Z in the playground don't save or undo a hidden document. React Flow listens for Delete on the whole document, so the canvas gets an `active` prop and drops its delete key while hidden. A browser check confirmed that Backspace, ⌘Z and ⌘S on the catalog screen leave the document alone and that ⌘Z works again on return.
+- The catalog screen mounts on first visit and then stays, so its playground session survives switching back and forth.
+- **Tradeoff:** a hidden editor still re-renders on store changes (a call's trace, validation results). That's the same work it does when visible, and cheaper than remounting a canvas.
+
+### Catalog data is fetched once and shared
+
+`catalog/data.ts` wraps each never-changing route (catalog, lint, tool registry) in a small resource: the first subscriber triggers the fetch, everyone shares the result through `useSyncExternalStore`, and a failure shows a Retry that refetches. The inspector's tool checkboxes and guard selector use the same registry as the playground.
+
+### Tables, cross-links and lint
+
+Locations, providers and appointment types are tables with a word filter over the visible fields and the ids each record references. A cross-link either focuses a record (a provider's location chip opens the Locations tab, clears its filter, highlights and scrolls to the row) or filters a table by an id ("12 providers" on a location filters providers by `loc_007`; "18 types" on a provider filters types by that provider's id). A type no provider offers shows "none" in red, and rows with lint issues get a dot whose tooltip lists them.
+
+- `IssueList` was split. `IssueRows` renders any `{level, message}` list with an optional label and an `onIssueClick(issue)` callback. `IssueList` is now the editor wrapper that maps an agent issue to a selection, and the lint panel maps a `CatalogIssue`'s `path` (`["providers", 26, "name"]`) to a record with `lintTarget`.
+- The lint tab also lists the catalog's six booking rules, since the lint is about how the data falls short of them.
+- **Tradeoff:** the filter is substring matching over ids too, so `prov_01` matches `prov_010`–`prov_019`. Links always use full ids, and the ids are fixed-width, so a link's filter never over-matches.
+
+### The playground shows what the model sees
+
+The form for each tool is generated from the argument schema the LLM gets (`catalog/toolForm.ts`): strings, dates, integers, booleans, enums and the nested `patient` object. An empty field is left out and a "null" option sends an explicit null, because `update_booking` treats those differently. The form checks only that a number is a number; a missing required argument or an unknown id goes to the tool, so the result is the same `{error}` the model would get, flagged as a refusal. Id fields suggest catalog records, and `slot_id` suggests the currently offered times.
+
+- Patient controls are Unknown/Yes/No buttons. Each click sends `update_booking` with `{patient: {fact: null | true | false}}`, so they follow the same mutation rules as the model, including clearing downstream choices that no longer fit (new patient + Echocardiogram clears the provider and location).
+- The draft panel shows the revision, the chosen service/provider/location by name and id, the selected time, how many times are offered for which revision, confirmation, and the receipt once booked. `book_appointment`'s `draft_revision` field offers the current revision.
+- The token count is labelled an estimate, with the 4-characters-a-token basis in its tooltip.
+- **Sessions:** the playground creates a sandbox when it first shows and disposes of it on unmount; a `pagehide` handler sends a `keepalive` delete when the tab closes. The effect is written so StrictMode's double run disposes of the extra session. Reset bumps a generation counter, which disposes of the old session and creates a new one. A 404 or 410 from a tool call marks the session gone: the backend's explanation and the last result stay on screen, Run is disabled, and Reset starts over.
+- **Tradeoff:** the form is generic, so it shows `cursor` as a text field rather than a "next page" button. Copying `next_cursor` from the result is one paste, and the form doesn't have to know each tool's paging.
+
+### Tools and guards in the inspector
+
+`setNodeTools(doc, i, tools)` and `setEdgeGuard(doc, i, j, guard)` are document actions like the rest, so each checkbox or selection is one undo step and is refused during a call. The Tools section lists the registry's tools with the first sentence of each description; a toggle appends or removes one name (`withTool`) and keeps the others' order. A tool or guard name the registry doesn't know stays visible (checked, or as a selectable option marked unknown), so it can be removed; the validator reports it as an error. The node's transitions list shows each edge's guard.
+
+### Testing
+
+- vitest: `setNodeTools`/`withTool`/`setEdgeGuard` (dedup, no-op identity, removing the field, keeping unknown names and other edge fields), tools and guards surviving export and re-import, form generation from the real schema shapes and argument building (omitted vs null, nested objects, number parsing, required arguments left to the tool), lint targets, issue grouping, cross-references and filtering, and the shared resource's load-once and retry.
+- A headless Chromium script against `make dev` checked: tool badges on the scheduler, toggling a tool and undoing it, the guard selector, a rejected rename surviving a trip to the catalog, the lint click focusing `prov_002`, the Richmond provider filter, the Echo / David Chen / Richmond `LOCATION_LACKS_CAPABILITY` violation through `update_booking` then `check_booking`, the patient controls, Reset getting a new session id, and shortcut scoping.
+
+### Not done in M8
+
+I didn't place a voice call during this milestone, so call controls and audio across a screen switch are checked by construction (they render outside the switched container), not by a live call. Shortcut scoping and the screen switch with invalid buffers are checked in the browser but not with vitest component tests, since the suite has no DOM environment. The benchmark and its write-up are M9.

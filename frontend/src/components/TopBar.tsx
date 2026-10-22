@@ -1,6 +1,8 @@
-// Top bar: agent identity, save (with an unsaved-changes dot), undo/redo, the
-// validation badge, import/export, the canvas/JSON toggle and the test call
-// button. The keyboard shortcuts are in App (useShortcuts).
+// Top bar: the agents/catalog switch, agent identity, save (with an
+// unsaved-changes dot), undo/redo, the validation badge, import/export, the
+// canvas/JSON toggle and the test call button. The editor's controls show only on
+// the agents screen; the test call button shows on both, since the call outlives
+// the switch. The keyboard shortcuts are in App (useShortcuts).
 
 import { useRef, useState, useSyncExternalStore } from "react";
 import { hasPendingBuffers, subscribeBuffers } from "../editor/buffers";
@@ -10,7 +12,62 @@ import { editorStore, isDirty, repairProblems, useEditor, useHistory } from "../
 import { issuesOf } from "../editor/validation";
 import { Button, IssueList } from "./fields";
 
-export default function TopBar({ onTestCall }: { onTestCall: () => void }) {
+export type Screen = "agents" | "catalog";
+
+export default function TopBar({
+  screen,
+  onScreen,
+  onTestCall,
+}: {
+  screen: Screen;
+  onScreen: (screen: Screen) => void;
+  onTestCall: () => void;
+}) {
+  const doc = useEditor((s) => s.doc);
+  const agentId = useEditor((s) => s.agentId);
+  const locked = useEditor((s) => s.locked);
+  const switcher = (
+    <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
+      {(["agents", "catalog"] as const).map((s) => (
+        <button
+          key={s}
+          type="button"
+          className={`px-3 py-1 ${screen === s ? "bg-slate-900 text-white" : "bg-white hover:bg-slate-50"}`}
+          onClick={() => onScreen(s)}
+        >
+          {s === "agents" ? "Agents" : "Catalog"}
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+      {switcher}
+      {screen === "agents" ? (
+        <EditorControls />
+      ) : (
+        <div className="mr-auto min-w-0">
+          <h1 className="truncate font-semibold">Clinic catalog</h1>
+          <div className="font-mono text-[11px] text-slate-400">backend/data/catalog.json (read-only)</div>
+        </div>
+      )}
+      {agentId && (screen === "agents" || locked) && (
+        <button
+          type="button"
+          className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+          disabled={!doc}
+          onClick={onTestCall}
+          title={screen === "agents" ? undefined : "Show the call panel"}
+        >
+          {locked ? "In call…" : "Test call"}
+        </button>
+      )}
+    </header>
+  );
+}
+
+function EditorControls() {
   const doc = useEditor((s) => s.doc);
   const agentId = useEditor((s) => s.agentId);
   const saved = useEditor((s) => s.saved);
@@ -24,7 +81,7 @@ export default function TopBar({ onTestCall }: { onTestCall: () => void }) {
   const forcedJson = repairProblems(doc).length > 0;
 
   return (
-    <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+    <>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <h1 className="truncate font-semibold">{doc?.name || agentId || "Agent Builder"}</h1>
@@ -81,33 +138,23 @@ export default function TopBar({ onTestCall }: { onTestCall: () => void }) {
       </div>
 
       {agentId && (
-        <>
-          <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
-            {(["canvas", "json"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                disabled={v === "canvas" && forcedJson}
-                className={`px-3 py-1 disabled:opacity-40 ${
-                  (forcedJson ? "json" : view) === v ? "bg-slate-900 text-white" : "bg-white"
-                }`}
-                onClick={() => setView(v)}
-              >
-                {v === "canvas" ? "Canvas" : "JSON"}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-            disabled={!doc}
-            onClick={onTestCall}
-          >
-            {locked ? "In call…" : "Test call"}
-          </button>
-        </>
+        <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
+          {(["canvas", "json"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              disabled={v === "canvas" && forcedJson}
+              className={`px-3 py-1 disabled:opacity-40 ${
+                (forcedJson ? "json" : view) === v ? "bg-slate-900 text-white" : "bg-white"
+              }`}
+              onClick={() => setView(v)}
+            >
+              {v === "canvas" ? "Canvas" : "JSON"}
+            </button>
+          ))}
+        </div>
       )}
-    </header>
+    </>
   );
 }
 

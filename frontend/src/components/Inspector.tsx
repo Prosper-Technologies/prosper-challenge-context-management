@@ -3,6 +3,7 @@
 // fields, message roles, schema keywords, other actions) is kept as-is.
 
 import type { AgentConfig, Edge, Node, PropertySchema } from "../generated/contract";
+import { registryData, useResource } from "../catalog/data";
 import * as d from "../editor/document";
 import { useEditor } from "../editor/store";
 import { agentIssues, edgeIssues, issuesOf, nodeIssues } from "../editor/validation";
@@ -230,6 +231,8 @@ function NodeInspector({ index }: { index: number }) {
         />
       </Section>
 
+      <NodeTools index={index} tools={node.tools} />
+
       <Section title="Transitions">
         {(node.edges ?? []).length === 0 ? (
           <p className="text-xs text-slate-400">
@@ -246,12 +249,102 @@ function NodeInspector({ index }: { index: number }) {
                 >
                   <span className="font-mono">{edge.function}</span>
                   <span className="text-slate-400"> → {edge.target}</span>
+                  {edge.guard && <span className="ml-1 text-sky-700">if {edge.guard}</span>}
                 </button>
               </li>
             ))}
           </ul>
         )}
       </Section>
+    </div>
+  );
+}
+
+const firstSentence = (text: string) => text.split(/(?<=\.)\s/)[0];
+
+/** One checkbox per registry tool, plus any the node names that the registry
+ * doesn't have (the validator reports those), so they can be unticked. */
+function NodeTools({ index, tools }: { index: number; tools: string[] | undefined }) {
+  const registry = useResource(registryData);
+  const edit = useEdit();
+  const listed = tools ?? [];
+  const known = registry.status === "ready" ? registry.data.tools : [];
+  const unknown = listed.filter((t) => !known.some((k) => k.name === t));
+  const toggle = (name: string, enabled: boolean) =>
+    edit((doc) => d.setNodeTools(doc, index, d.withTool(doc.nodes[index]?.tools, name, enabled)));
+
+  return (
+    <Section title="Tools">
+      <p className="text-[11px] text-slate-400">
+        Catalog tools the LLM can call here without leaving the node.
+      </p>
+      {registry.status === "failed" && (
+        <p className="text-xs text-red-700">
+          Couldn't load the tool list: {registry.error}{" "}
+          <button type="button" className="underline" onClick={registryData.retry}>
+            Retry
+          </button>
+        </p>
+      )}
+      {registry.status === "loading" && listed.length === 0 && (
+        <p className="text-xs text-slate-400">Loading tools…</p>
+      )}
+      {known.map((tool) => (
+        <Checkbox
+          key={tool.name}
+          label={tool.name}
+          hint={firstSentence(tool.description)}
+          mono
+          checked={listed.includes(tool.name)}
+          onChange={(on) => toggle(tool.name, on)}
+        />
+      ))}
+      {unknown.map((name) => (
+        <Checkbox
+          key={name}
+          label={name}
+          hint={registry.status === "ready" ? "not a known tool" : undefined}
+          mono
+          checked
+          onChange={(on) => toggle(name, on)}
+        />
+      ))}
+    </Section>
+  );
+}
+
+/** The edge's guard: none, a registry guard, or (kept selectable) an unknown name. */
+function GuardField({ node: i, edge: j, guard }: { node: number; edge: number; guard: string }) {
+  const registry = useResource(registryData);
+  const edit = useEdit();
+  const guards = registry.status === "ready" ? registry.data.guards : [];
+  const current = guards.find((g) => g.name === guard);
+  const options = [
+    { value: "", label: "none" },
+    ...(guard && !current
+      ? [{ value: guard, label: `${guard}${registry.status === "ready" ? " — unknown" : ""}` }]
+      : []),
+    ...guards.map((g) => ({ value: g.name, label: g.name })),
+  ];
+
+  return (
+    <div className="flex flex-col gap-1">
+      <SelectField
+        label="Guard"
+        hint="must pass before the transition"
+        value={guard}
+        options={options}
+        onChange={(next) => edit((doc) => d.setEdgeGuard(doc, i, j, next || null))}
+      />
+      {current && <p className="text-[11px] text-slate-500">{current.description}</p>}
+      {registry.status === "failed" && (
+        <p className="text-xs text-red-700">
+          Couldn't load the guards: {registry.error}{" "}
+          <button type="button" className="underline" onClick={registryData.retry}>
+            Retry
+          </button>
+        </p>
+      )}
     </div>
   );
 }
@@ -304,6 +397,7 @@ function EdgeInspector({ node: i, edge: j }: { node: number; edge: number }) {
         ]}
         onChange={(target) => edit((doc) => d.updateEdge(doc, i, j, { target }))}
       />
+      <GuardField node={i} edge={j} guard={edge.guard ?? ""} />
       <button
         type="button"
         className="self-start text-xs text-slate-500 underline"

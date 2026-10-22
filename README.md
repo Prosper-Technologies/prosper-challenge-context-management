@@ -80,12 +80,21 @@ Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, pat
 
 - **Node tools.** A node's `tools` lists the catalog tools it exposes besides its edges (`search_services`, `find_providers`, `find_locations`, `update_booking`, `check_booking`, `get_availability`, `book_appointment`, `catalog_overview`). A tool runs without leaving the node; when it changes the booking, the call panel's collected state updates from a `state_updated` server message (not a path step).
 - **Edge guards.** An edge's optional `guard` names a check that must pass first (`service_chosen`, `booking_ready`, `slot_selected`, `booking_completed`). A failed guard keeps the node active and tells the model what's missing. `success` is entered only through `booking_completed`, i.e. after a real reservation.
-- **Validation** knows the registry: unknown tools or guards, a tool that clashes with an edge function, and an agent that books without a guarded success end node are errors. The editor doesn't have tool or guard controls yet (M8); the JSON view edits them, and form edits keep them.
+- **Validation** knows the registry: unknown tools or guards, a tool that clashes with an edge function, and an agent that books without a guarded success end node are errors.
+- **In the editor:** a node's inspector has a Tools section (one checkbox per catalog tool), an edge's inspector has a Guard selector, and canvas nodes show an "N tools" badge. Each change is one undo step.
 - Bookings are held in memory in one calendar shared by voice calls, and reset when the backend restarts.
+
+### The catalog screen (Phase 2)
+
+**Catalog** in the top bar switches to a read-only view of `backend/data/catalog.json`; **Agents** switches back. The editor stays as you left it, unsaved or rejected field text included, and a test call keeps running across the switch. Editor shortcuts and the canvas's Delete key only act on the agents screen.
+
+- **Tables** for locations, providers and appointment types, with a filter. Links cross the tables: a provider's location chips open that location, and the counts ("12 providers", "18 types") filter the other table by that record.
+- **Lint** lists the booking rules and the catalog's health issues (unbookable types, new-patient dead ends, duplicate names, "Dr." on NPs and PAs, confusable locations, unused capabilities). Clicking an issue opens the record; rows with issues have a dot.
+- **Tool playground** (right) runs the scheduler's tools in a sandbox session with its own calendar. Pick a tool, fill in the form generated from its schema (empty fields are left out; "null" sends an explicit null), and see the JSON result the model would get, with an approximate token count. Patient controls (Unknown/Yes/No) and the draft view sit above the form. Reset starts a fresh sandbox; an expired session keeps its last result on screen until you reset.
 
 ### Catalog API (Phase 2)
 
-The catalog screen (M8) and its tool playground use these routes. The playground runs the same tools as a voice call, in a sandbox session with its own calendar:
+The catalog screen and its tool playground use these routes. The playground runs the same tools as a voice call, in a sandbox session with its own calendar:
 
 | Route | |
 | --- | --- |
@@ -118,7 +127,7 @@ The catalog screen (M8) and its tool playground use these routes. The playground
 | `backend/catalog_voice.py` | The voice adapter: binds the catalog tools and guards into a `Registry`, keeping each call's session in `flow_manager.state["patient"]` and `["booking"]`. |
 | `backend/contract.py` | The backend/frontend JSON Schema contract (`make types`). |
 | `backend/tests/` | pytest suite (`make test`). |
-| `frontend/` | The builder UI (Vite + React + TS). `src/editor/` holds the document model: pure document actions, the undoable Zustand store, layout, validation, keyboard shortcuts and the agent flows (open, save, import/export, test call). `src/components/` holds the canvas (React Flow), inspector, JSON view and call panel. Test calls use `@pipecat-ai/client-js` over SmallWebRTC through the Vite proxy. `src/generated/` holds the generated contract types. |
+| `frontend/` | The builder UI (Vite + React + TS). `src/editor/` holds the document model: pure document actions, the undoable Zustand store, layout, validation, keyboard shortcuts and the agent flows (open, save, import/export, test call). `src/components/` holds the canvas (React Flow), inspector, JSON view, call panel and the catalog screen (tables, lint, tool playground). `src/catalog/` holds the catalog screen's logic: shared loading of the catalog routes, tool forms generated from tool schemas, and lint/cross-link navigation. Test calls use `@pipecat-ai/client-js` over SmallWebRTC through the Vite proxy. `src/generated/` holds the generated contract types. |
 | `backend/agents/example.json` | The example agent **as data** — a clinic scheduler, and the agent a call runs when it selects none. The starting point for the Phase 2 context-management work. |
 | `backend/agents/scheduler.json` | The Phase 2 scheduler: the catalog tools on each node and guarded transitions to a booking. |
 | `backend/data/catalog.json` | A deliberately large, deliberately messy clinic catalog (locations, providers, appointment types, booking rules) for the Phase 2 work. See [`backend/data/README.md`](backend/data/README.md). |

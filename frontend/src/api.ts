@@ -1,6 +1,16 @@
-// The builder API (backend/api.py), through the Vite proxy.
+// The builder API (backend/api.py) and the catalog API (backend/catalog_api.py),
+// through the Vite proxy.
 
-import type { AgentConfig, AgentSummary, IssuesResponse } from "./generated/contract";
+import type {
+  AgentConfig,
+  AgentSummary,
+  Catalog,
+  IssuesResponse,
+  LintResponse,
+  PlaygroundSession,
+  ToolRunResponse,
+  ToolsResponse,
+} from "./generated/contract";
 
 export class ApiError extends Error {
   constructor(
@@ -55,3 +65,28 @@ export const deleteAgent = (id: string) =>
 
 export const validateAgent = (doc: unknown) =>
   request<IssuesResponse>("/api/agents/validate", json("POST", doc));
+
+// ---- catalog ------------------------------------------------------------------------
+
+export const getCatalog = () => request<Catalog>("/api/catalog");
+
+export const getCatalogLint = () => request<LintResponse>("/api/catalog/lint");
+
+/** Tool schemas and edge guard metadata (the registry agents may name). */
+export const listTools = () => request<ToolsResponse>("/api/catalog/tools");
+
+/** A new sandbox session, with its own calendar. */
+export const createPlaygroundSession = () =>
+  request<PlaygroundSession>("/api/catalog/sessions", { method: "POST" });
+
+/** `keepalive` lets it outlive the page (on `pagehide`). Expired ids are a 204 too. */
+export const deletePlaygroundSession = (id: string, { keepalive = false } = {}) =>
+  request<void>(`/api/catalog/sessions/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+
+/** Run a tool in a sandbox session. A tool's own failure is a 200 with `{error}` in
+ * `result`; an unknown session is a 404 and an expired one a 410 (`ApiError.status`). */
+export const runTool = (name: string, sessionId: string, args: Record<string, unknown>) =>
+  request<ToolRunResponse>(
+    `/api/catalog/tools/${encodeURIComponent(name)}`,
+    json("POST", { session_id: sessionId, args }),
+  );
