@@ -1,6 +1,7 @@
 """The catalog API (catalog_api.py): catalog, lint and tool metadata, and the tool
 playground's isolated, expiring sessions."""
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -16,7 +17,10 @@ from catalog.availability import CLINIC_TZ, Calendar, voice_calendar
 from catalog.models import CATALOG_PATH, default_catalog
 from catalog.tools import GUARDS, TOOLS
 from catalog_api import PlaygroundSessions, build_router
-from catalog_voice import build_registry
+from agent_builder import AgentBuilder
+from catalog.policy import default_policy
+from catalog_voice import build_registry, load_session
+from eval.flow import TextFlow
 
 NOW = datetime(2026, 10, 19, 7, 0, tzinfo=CLINIC_TZ)
 MRI = {
@@ -229,21 +233,79 @@ def test_the_playground_never_uses_the_voice_calendar():
     assert voice_calendar.cache_info().currsize == before
 
 
-def test_http_and_voice_adapters_give_the_same_results(client):
+# An agent whose one node exposes every tool, for driving the evaluation adapter.
+ALL_TOOLS_AGENT = {
+    "name": "All tools",
+    "persona": "Test.",
+    "initial_node": "tools",
+    "nodes": [
+        {
+            "name": "tools",
+            "task_messages": [{"role": "developer", "content": "Use the tools."}],
+            "tools": sorted(TOOLS),
+            "edges": [{"function": "booking_done", "description": "Booked.", "target": "done", "guard": "booking_completed"}],
+        },
+        {"name": "done", "task_messages": [{"role": "developer", "content": "Say goodbye."}], "end": True},
+    ],
+}
+
+
+def without_session_ids(value):
+    """A result or session state without what derives from the session id."""
+    if isinstance(value, dict):
+        return {k: without_session_ids(v) for k, v in value.items() if k not in {"id", "session_id", "confirmation"}}
+    if isinstance(value, list):
+        return [without_session_ids(v) for v in value]
+    return value
+
+
+def test_voice_http_and_evaluation_adapters_give_the_same_results(client):
+    """The same calls through the voice adapter (a registry binding on a flow state),
+    HTTP (a playground session) and the evaluation (the compiled graph driven as
+    text) give the same results, refusals included, and leave the same session."""
     calls = [
         ("search_services", {"query": "knee MRI"}),
         ("find_providers", {"name": "Dr. Chen"}),
+        ("update_booking", {"provider_id": "prov_999"}),
+        ("get_availability", {"day": "not a date"}),
         ("update_booking", MRI),
         ("get_availability", {"part_of_day": "afternoon"}),
         ("update_booking", {"location_id": "loc_001"}),
         ("check_booking", {}),
+        ("update_booking", {"location_id": "loc_004"}),
+        ("get_availability", {}),
+        ("update_booking", lambda seen: {"slot_id": seen["slots"][0]["id"]}),
+        ("book_appointment", lambda seen: {"draft_revision": seen["draft"]["revision"], "confirmed": False}),
+        ("book_appointment", lambda seen: {"draft_revision": seen["draft"]["revision"] - 1, "confirmed": True}),
+        ("book_appointment", lambda seen: {"draft_revision": seen["draft"]["revision"], "confirmed": True}),
+        ("book_appointment", lambda seen: {"draft_revision": seen["draft"]["revision"], "confirmed": True}),
     ]
+    refused = {2, 3, 11, 12}
     registry = build_registry(calendar=Calendar(clock=lambda: NOW))
-    state: dict = {}
+    voice_state: dict = {}
     sid = new_session(client)
-    for name, args in calls:
-        voice, _ = registry.tools[name].run(args, state)
-        assert run(client, sid, name, args)["result"] == voice, name
+    flow = TextFlow(AgentBuilder.from_dict(ALL_TOOLS_AGENT, build_registry(calendar=Calendar(clock=lambda: NOW))))
+    flow.start()
+
+    seen: dict = {}  # the latest of each part of a result, for later arguments
+    receipts = []
+    for n, (name, args) in enumerate(calls):
+        args = args(seen) if callable(args) else args
+        voice, _ = registry.tools[name].run(args, voice_state)
+        http = run(client, sid, name, args)
+        evaluation, _ = asyncio.run(flow.call(name, json.dumps(args)))
+        assert without_session_ids(http["result"]) == without_session_ids(voice), name
+        assert without_session_ids(evaluation) == without_session_ids(voice), name
+        assert ("error" in voice) == (n in refused), (n, name, voice)
+        seen.update(voice)
+        if "confirmation" in voice:
+            receipts.append(voice)
+    assert len(receipts) == 2 and receipts[0] == receipts[1]  # the retry returns the same receipt
+
+    sessions = [load_session(voice_state, default_policy()), load_session(flow.state, default_policy())]
+    states = [without_session_ids(s.state.dump()) for s in sessions]
+    assert states[0] == states[1] == without_session_ids(http["state"])
+    assert states[0]["reservation"] is not None
 
 
 def test_importing_the_catalog_api_loads_no_pipecat():

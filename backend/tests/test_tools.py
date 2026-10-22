@@ -96,6 +96,17 @@ def test_ambiguous_search_says_what_to_ask(ctx):
     assert "ask which one" in result["hint"]
 
 
+@pytest.mark.parametrize(
+    "tool, args, key",
+    [("search_services", {"query": "moon base"}, "services"), ("find_providers", {"name": "moon base"}, "providers"),
+     ("find_locations", {"query": "moon base"}, "locations")],
+)  # fmt: skip
+def test_unrelated_searches_match_nothing_and_say_so(ctx, tool, args, key):
+    result = run(ctx, tool, **args)
+    assert result[key] == [] and result["total_matches"] == 0
+    assert "ambiguous" not in result and "rephrase" in result["hint"]
+
+
 def test_service_notes_flag_unbookable_and_gated_services(ctx):
     eye = run(ctx, "search_services", query="eye exam")["services"][0]
     assert "can't be booked" in eye["notes"][0]

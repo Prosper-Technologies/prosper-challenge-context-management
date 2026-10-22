@@ -11,8 +11,10 @@
 pipecat-ai[runner,webrtc,silero,elevenlabs,openai]==1.4.0
 # Pipecat Flows: node-graph conversations.
 pipecat-ai-flows==1.4.0
-# Used directly: the agent schema, the builder API, logging and .env loading.
+# Used directly: the agent schema, the builder API, logging, .env loading and the
+# evaluation's OpenAI client (backend/eval/).
 pydantic>=2.11,<3
 fastapi>=0.115,<1
 loguru>=0.7,<1
 python-dotenv>=1.0,<2
+openai>=2.0,<3

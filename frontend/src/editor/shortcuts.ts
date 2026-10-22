@@ -36,6 +36,25 @@ export function shortcutFor(e: Keys, inTextField: boolean, mac = isMac): Shortcu
   return null;
 }
 
+export type ShortcutActions = Record<Shortcut, () => void>;
+
+/** A keydown listener that runs the shortcuts' actions, but only while `active()`
+ * (the editor is showing): keys pressed on another screen leave the document alone. */
+export function shortcutListener(
+  active: () => boolean,
+  actions: ShortcutActions,
+  inTextField: (target: EventTarget | null) => boolean = isTextField,
+  mac = isMac,
+): (e: Keys & { target: EventTarget | null; preventDefault(): void }) => void {
+  return (e) => {
+    if (!active()) return;
+    const shortcut = shortcutFor(e, inTextField(e.target), mac);
+    if (!shortcut) return;
+    e.preventDefault(); // e.g. the browser's own "Save page"
+    actions[shortcut]();
+  };
+}
+
 /** Whether keys typed here edit text (so the browser's own undo applies). */
 export function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

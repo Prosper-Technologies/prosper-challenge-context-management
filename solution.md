@@ -2,7 +2,7 @@
 
 Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
 
-The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, [Milestone 7](#milestone-7-api-and-contract) the catalog API, and [Milestone 8](#milestone-8-frontend) the catalog screen and the editor's tool and guard controls; the benchmark (M9) is still to come.
+The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, [Milestone 7](#milestone-7-api-and-contract) the catalog API, and [Milestone 8](#milestone-8-frontend) the catalog screen and the editor's tool and guard controls, and [Milestone 9](#milestone-9-evaluation) the naive vs tools benchmark and its results.
 
 ## Milestone 1: browser integration
 
@@ -256,7 +256,7 @@ Also checked in headless Chromium against the real backend: import, then tidy, t
 
 ## Phase 2: context-management design
 
-Status: M5 (the catalog domain), M6 (tools and builder integration), M7 (the catalog API) and M8 (the frontend) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine); M9 in [PLAN.md](PLAN.md#phase-2-context-management-plan) is proposed. No Phase 2 performance or accuracy results have been measured yet.
+Status: M5 (the catalog domain), M6 (tools and builder integration), M7 (the catalog API), M8 (the frontend) and M9 (the evaluation) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine). The design notes in this section were written before the benchmark; [M9](#results) has the measured results, which confirm the cost argument and show no measurable correctness difference at k=3.
 
 ### Deterministic catalog rules, conversational interpretation
 
@@ -429,7 +429,7 @@ Results are projections, not catalog entities: cards with IDs and the fields tha
 
 ### The scheduler agent
 
-The scheduler has seven nodes. `find_service` searches and records the service. `choose_provider_location` follows `next_question` through facts, provider and location. `offer_times` offers times and records the pick. `confirm` reads the booking back and books it. `success` and `handoff` are end nodes. Every nonterminal node after the greeting exposes `update_booking` and `check_booking`, so corrections work anywhere, and has back edges (`change_service`, `change_choices`, `change_time`) and an edge to `handoff`.
+The scheduler has seven nodes (M9 merged `find_service` and `choose_provider_location` into `choose_appointment`; see [below](#the-smoke-runs-changed-the-scheduler)). `find_service` searches and records the service. `choose_provider_location` follows `next_question` through facts, provider and location. `offer_times` offers times and records the pick. `confirm` reads the booking back and books it. `success` and `handoff` are end nodes. Every nonterminal node after the greeting exposes `update_booking` and `check_booking`, so corrections work anywhere, and has back edges (`change_service`, `change_choices`, `change_time`) and an edge to `handoff`.
 
 - **Why only the tools a step needs:** `book_appointment` exists only in `confirm`, and searches aren't offered once a time is being chosen. A correction that needs a new search goes back to `choose_provider_location`. This keeps each node's tool schemas small and the booking step explicit.
 - **Tradeoff:** Pipecat Flows appends context across nodes, so the earlier tool results stay in the prompt. That's measured in M9, not mitigated here.
@@ -531,3 +531,106 @@ The form for each tool is generated from the argument schema the LLM gets (`cata
 ### Not done in M8
 
 I didn't place a voice call during this milestone, so call controls and audio across a screen switch are checked by construction (they render outside the switched container), not by a live call. Shortcut scoping and the screen switch with invalid buffers are checked in the browser but not with vitest component tests, since the suite has no DOM environment. The benchmark and its write-up are M9.
+
+## Milestone 9: evaluation
+
+`backend/eval/` runs the scheduler against a simulated caller for every scenario, with the full catalog in the prompt (**naive**) and with the catalog tools (**tools**), and writes [`backend/eval/results.md`](backend/eval/results.md). `make eval` runs it. The pytest and vitest gaps in the plan's checklist are filled too (see [Testing](#testing-5)).
+
+### The harness runs the real graph as text
+
+`TextFlow` (`eval/flow.py`) drives the `NodeConfig`s and `FlowsFunctionSchema` handlers that `AgentBuilder` compiles for a call, with the catalog registry bound to a fresh calendar. Tools, guards, transitions and the flow state are therefore the call's own. Only the Pipecat pipeline is replaced, and its context handling is reproduced: the node's `role_message` is the system prompt, each node's task messages are appended (Flows' default APPEND strategy), and the node's functions are the tools. The model's tool calls go through the handlers, and a transition happens after that round's results are in the context. An end node ends the conversation once the model has spoken in it.
+
+- **Why:** a separate "eval agent" would measure something other than what a call runs. This way the evaluation is the third adapter over the same handlers, and a test checks that the voice adapter, an HTTP playground session and the evaluation's `TextFlow` give identical results, refusals included, and leave the same session.
+- **Tradeoff:** it's text, not voice. There's no speech recognition error, interruption or TTS time, so latency is model latency per call, not what a caller hears. Pipecat's own message ordering is approximated, not reused. Model calls use the provider's default sampling, as the voice pipeline does (the scheduler document sets only the model).
+- `eval/llm.py` is the seam: one `complete()` per model request, returning the provider's usage (input, output, cached) and the measured latency. The harness tests use a scripted stand-in, so they need no network.
+
+### Two modes, one variable
+
+`naive` is the scheduler document with the catalog file appended to the persona as compact JSON (about 10k tokens, estimated) and the four catalog search tools removed from every node. A note tells it to look things up in the catalog wherever its instructions mention a search tool. `tools` is the checked-in scheduler, unchanged. Both modes keep the same graph, guards, `update_booking`/`check_booking`/`get_availability`/`book_appointment`, model, caller, simulated date and calendar.
+
+- **Why:** the plan makes catalog access the only variable, so differences in correctness and cost come from it, not from different prompts or validators.
+- **Tradeoff:** the naive baseline isn't naive about booking. It has the same policy engine behind `update_booking`, whose results include up to three feasible options and the next question. It is "catalog in the prompt, guardrails in code", which flatters its correctness compared with a prompt-only agent. A prompt-only agent with no booking validator would also not be comparable on policy violations, because nothing would refuse its bookings.
+
+### Scoring: session state and the caller's true facts
+
+A run is correct if `check_outcome` passes on the session the tools left in the flow state: an intended reservation, or a draft blocked for an intended reason. The booking must also not violate policy for the caller's *true* facts. The validator only knows the facts the agent recorded, so an agent that records a new patient as existing can book a provider who isn't accepting new patients without any refusal. That booking matches a "provider omitted" pattern, but it isn't correct, and a test pins this.
+
+- A blocked outcome requires the caller's request to be in the draft. An agent that explains "North Gate has no dental" without recording North Gate fails, because handing off without trying and handing off after a real block look the same from the outside. The persona now says to record a request even if it may not work.
+- Every run records completed bookings, wrong bookings, bookings violating the true facts, wrong recorded facts, refused `book_appointment` calls, guard rejections, tool errors, calls to functions the current node doesn't have, updates that left the draft blocked, turns, model and tool calls, per-call prompt tokens, cached tokens, latency, and the provider-reported model ids. These are reported separately, not folded into one score.
+- Cost is an estimate from assumed list prices recorded in the report (`eval/report.py`), split into scheduler and simulated caller.
+
+### The simulated caller
+
+`gpt-4o-mini` plays the caller (`eval/caller.py`). Its prompt has the scenario's facts (new or existing patient, referral), its opening line and its details, never the intended outcome. Its first line is the scenario's opening verbatim, and it says `[END]` to hang up. It doesn't judge the conversation.
+
+- The first smoke run found the caller inventing needs ("let me check other locations") and hanging up before anything was booked. Its prompt now forbids wanting anything not described, lists corrections separately ("Actually…", "instead"), says them one at a time and only after the assistant has acted, and only says goodbye after a booking, a block or a handoff.
+- **Tradeoff:** a model caller still varies between runs and sometimes volunteers details early (one run's caller said "standard vaccinations like a flu shot" before it was asked). Three repetitions and the full traces make that visible; the scoring doesn't depend on its wording.
+
+### Scenarios
+
+Three scenarios bring the set to 20, each with a deterministic step script like the others:
+
+- `mission_blood_draw`: "the Mission clinic" matches Mission Bay and Mission District. Both have lab rooms, but the only lab provider works at Mission Bay, so Mission District is `NO_FEASIBLE_OPTION`.
+- `late_location_change`: after a time is picked, the caller moves to another of the provider's locations, and the time is cleared.
+- `repeated_searches`: two questions about services, a first choice blocked by a missing referral, then a booking. It adds context before the booking starts.
+
+A scenario can now list `prebooked` reservations that other callers hold when a live run starts. `overlapping_reservations` holds Dr. David Chen's 09:00 EKG at Mission Bay, which blocks the 08:45 echo at Mission District for the live caller. The step replay doesn't use it, and a test checks that prebooking removes exactly the overlapping times.
+
+### The smoke runs changed the scheduler
+
+Before the reported run, smoke runs (6 scenarios × 2 modes × 1 run each) found defects in `scheduler.json` itself, in both modes:
+
+- **The service/provider split was a trap.** After the service was recorded, `update_booking`'s `next_question` asked for the provider, so the model collected the provider and location inside `find_service`. That node had no `find_providers` and no `get_availability`. The model then concluded that a provider missing from the three listed options "isn't available", handed off, or said "let me check those times" for 15 turns without a tool to do it. It almost never took `service_chosen`. Prompt wording didn't fix it (5/12 correct after a prompt-only change). `find_service` and `choose_provider_location` are now one `choose_appointment` node with all four lookups, `update_booking` and `check_booking`. The narrowing loop runs in one place, and `choices_complete` (guarded by `booking_ready`) is the only way forward. The same smoke set then reached 11/12. The `service_chosen` guard stays in the registry for other agents.
+- **Persona rules:** record a requested service, provider or location even if it may not work, since the result explains why; hand off only when the caller asks for a person or turns down the fixes; never say you're checking something without calling the tool in the same turn; booking results list at most three options, so look up a named provider before saying anything about them.
+- **Tradeoff:** these changes were made with 6 of the 20 scenarios in view, so the reported numbers aren't from a held-out set. The defects were general (any caller who names a doctor outside the first three options hit the first one), and the scenarios weren't changed to fit the agent. A held-out scenario set is listed under remaining work.
+
+### Results
+
+The reported run is `20261022T002911Z`: 20 scenarios × 3 repetitions × 2 modes, `gpt-4o` scheduler and `gpt-4o-mini` caller. [`results.md`](backend/eval/results.md) has the full tables, `results.json` the per-run metrics, and `backend/eval/runs/20261022T002911Z/traces.jsonl` every conversation.
+
+| | naive | tools |
+|---|---|---|
+| Intended outcome reached | 48/60 (80%) | 47/60 (78%) |
+| Wrong bookings / bookings violating the true facts | 9 / 0 | 6 / 0 |
+| Scheduler input tokens per conversation (mean) | 171,763 (84% cached) | 41,862 (25% cached) |
+| Uncached input tokens per conversation (mean) | 26,630 | 31,240 |
+| Prompt size, first → last call (mean) | 8,703 → 11,105 | 382 → 2,813 |
+| Est. scheduler cost per conversation | $0.25 | $0.10 |
+| Latency per model call, p50 / p95 | 0.80s / 1.24s | 0.76s / 1.14s |
+
+What the numbers say, and what they don't:
+
+- **Correctness is a tie at this sample size.** One run apart in 60, and both modes have the same policy engine behind them, so neither booked anything that violates policy for the caller's true facts. The plan expected this: guardrails make violations zero in both modes, so they say nothing about matching. Three repetitions per scenario are enough to see which scenarios are fragile, but not to rank two agents within a few points.
+- **The modes fail differently.** Naive's misses are catalog-reading errors. In `multi_location_provider` (0/3) it told the caller Sunset has no dermatology, although Dr. Kenji Kim practises there, and booked another location. In `knee_mri_unknown_facts` (1/3) it booked "MRI - Spine" for a knee. It booked a New Patient Consultation for an OB/GYN request, and recorded a wrong patient fact twice. Its updates left the draft blocked 27 times, against 8 for tools: the validator caught many wrong IDs before they became bookings. Tools' misses are about conversation policy, not matching:
+  - 5 runs explained a real block ("no providers offer eye exams") and handed off without recording the request, which the scoring counts as a miss (`ophthalmology_not_offered` 0/3, `dental_north_gate` 1/3).
+  - `repeated_searches` (0/3) booked a service from the earlier "travel shots" search instead of searching for the flu shot the caller asked for.
+  - In 2 runs (`upstream_conflict_kept`) it told the caller "everything is confirmed" without calling `book_appointment`. Scoring against the session caught that; scoring the transcript wouldn't have.
+- **`correction_service` (1/3 in both modes) is partly a caller artifact.** The simulated caller said "Midtown is fine" before its corrections and then picked the first option offered for the MRI. Any agent would have booked Downtown there.
+- **Cost:** tools sends 4.1× fewer input tokens and costs 2.6× less, not 4×. OpenAI caches the naive prompt's stable 9k-token catalog prefix at half price, so naive's *uncached* input (26.6k) is about the same as tools' (31.2k). Tools caches only 25%: tool definitions come before the messages, and each node exposes a different set, so every transition invalidates the cached prefix. With a provider that discounts cached tokens more heavily, the gap would narrow further. Latency per call is about the same, and so is total model time per conversation (13.9s vs 14.4s): tools makes more, smaller calls.
+- **Prompt size, not just cost:** naive's prompt never drops below 8.7k tokens and reached 15.4k. Tools' largest was 6.9k. The catalog is 10k tokens now; at ten times the size, naive stops fitting comfortably, while the tools results stay capped at about 400 tokens each.
+
+### Context growth: measured, not mitigated
+
+Tools-mode prompts grow from 382 tokens to 2.8k on average by the last call (5.5k by call 30), because Flows appends every node's instructions and every tool result. That's still a third of naive's starting prompt, and the long tail is the correction scenarios (`correction_service` averages 158k input tokens per conversation in tools mode, against 47k for most others).
+
+- **Decision:** no state summary at node boundaries yet. The plan made it conditional on growth materially hurting cost or latency. Per-call latency doesn't change with prompt size in this range, and the scheduler costs $0.10 a conversation. A summary would also have to keep unresolved preferences and recent caller turns (the `repeated_searches` failure is a stale earlier search being reused), so its correctness risk is real.
+- **The cheaper lever is caching.** A stable tool list across nodes, with guards rather than tool removal enforcing what can run where, would let the prefix cache work. It would cost the per-node tool scoping that keeps `book_appointment` out of sight before `confirm`. That trade-off is worth measuring before a summary.
+
+### Testing
+
+- `tests/test_eval.py`, with scripted LLMs and no network: a booking through the real graph with path, transitions, state updates, usage, models and the opening line checked; context appended across nodes and tools following the node; naive mode's catalog prompt, tool removal and validity; a search tool called in naive mode; unknown functions, guard rejections, tool errors and refused bookings counted; a booking that passes the validator but violates the caller's true facts scored as wrong; prebooked times held before the call; turn limit, round limit and API errors still producing a record; the caller prompt (facts in, outcome out, corrections listed apart, opening line without a model call); the report's aggregates, prices and rendering; the CLI refusing bad options before creating an API client.
+- `test_catalog_api.py`: the voice adapter, an HTTP playground session and the evaluation's `TextFlow` give identical results and leave the same session, across searches, refused updates, bad arguments, corrections, offers, an unconfirmed booking, a stale revision, a booking and its idempotent retry.
+- `test_index.py` / `test_tools.py`: unrelated queries match no provider either, at the index and tool level; ranking doesn't change with the catalog's order or `PYTHONHASHSEED`.
+- `test_scenarios.py`: the three new scenarios replay, and prebooking removes exactly the overlapping times.
+- `test_runtime.py`: updated for `choose_appointment`.
+- vitest: the shortcut listener does nothing while the editor is hidden and works again when it shows (`shortcutListener`, extracted from `App`), and editor issue clicks route to the agent, node or edge, tool issues to the node and guard issues to the edge.
+- `make test`, `make check-types` and `npm --prefix frontend run typecheck` pass.
+
+### Not done / remaining work
+
+- **A held-out scenario set.** The scheduler fixes came from smoke runs over 6 of these 20 scenarios.
+- **More repetitions.** k=3 can't separate 80% from 78%. A larger k, or more scenarios per failure type, would.
+- **Recording blocked requests.** The persona says to, but 5 tools runs still explained the block without recording it. A guard on `handoff_to_staff` that requires a recorded request would enforce it in code, at the cost of a round trip.
+- **False confirmations.** The `success` guard stops the graph from reaching `success` without a receipt, but nothing stops the model *saying* "you're booked" in `confirm`. A post-check on the confirm node's reply, or a TTS-side filter, would close that.
+- **Caching-friendly tool exposure,** as above, and a state summary only if longer conversations make growth matter.
+- I haven't placed a live voice call with the merged scheduler. The flow is tested through the real FlowManager and the text benchmark, but speech recognition errors and interruptions aren't part of the benchmark.

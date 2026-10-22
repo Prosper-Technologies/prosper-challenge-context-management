@@ -30,7 +30,7 @@ import {
   saveAgent,
   startTestCall,
 } from "./editor/session";
-import { isTextField, shortcutFor } from "./editor/shortcuts";
+import { shortcutListener } from "./editor/shortcuts";
 import { editorStore, repairProblems, useEditor } from "./editor/store";
 import { createValidator } from "./editor/validation";
 import { useTestCall } from "./testCall";
@@ -59,16 +59,11 @@ function useShortcuts(active: boolean) {
   const enabled = useRef(active);
   enabled.current = active;
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!enabled.current) return;
-      const shortcut = shortcutFor(e, isTextField(e.target));
-      if (!shortcut) return;
-      e.preventDefault(); // e.g. the browser's own "Save page"
-      const { undo, redo } = editorStore.getState();
-      if (shortcut === "save") void saveAgent();
-      else if (shortcut === "undo") undo();
-      else redo();
-    };
+    const onKeyDown = shortcutListener(() => enabled.current, {
+      save: () => void saveAgent(),
+      undo: () => editorStore.getState().undo(),
+      redo: () => editorStore.getState().redo(),
+    });
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);

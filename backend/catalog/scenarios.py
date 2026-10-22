@@ -12,6 +12,9 @@
 # Steps run against session "a" unless they name another. A scenario with more than
 # one session exercises the calendar; its outcome is about session "a".
 #
+# `prebooked` lists reservations other callers already hold when a live evaluation
+# run starts (prebook()); the step replay doesn't use it.
+#
 
 import json
 from datetime import datetime
@@ -21,7 +24,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .policy import ViolationCode
+from .availability import Calendar
+from .policy import ViolationCode, default_policy
 from .session import SchedulingSession
 
 SCENARIOS_PATH = Path(__file__).parent.parent / "data" / "scenarios.json"
@@ -53,6 +57,15 @@ class Outcome(_Fixture):
     blocked: list[ViolationCode] = Field(default_factory=list)
 
 
+class Prebooked(_Fixture):
+    """A reservation another caller holds before the scenario starts."""
+
+    service_id: str
+    provider_id: str
+    location_id: str
+    start: datetime
+
+
 class Step(_Fixture):
     op: Literal["search_services", "find_providers", "find_locations", "update", "check", "offer", "book"]
     session: str = "a"
@@ -66,6 +79,7 @@ class Scenario(_Fixture):
     now: datetime
     caller: Caller
     outcome: Outcome
+    prebooked: list[Prebooked] = Field(default_factory=list)
     steps: list[Step]
 
 
@@ -88,6 +102,30 @@ def check_outcome(scenario: Scenario, session: SchedulingSession) -> tuple[bool,
     if scenario.outcome.booked:
         return False, "no booking was made"
     return False, f"expected a block for {scenario.outcome.blocked}, got {sorted(codes) or 'no violations'}"
+
+
+def prebook(scenario: Scenario, calendar: Calendar) -> None:
+    """Book the scenario's prebooked reservations in the calendar, each through its
+    own session, as other callers would have."""
+    for n, p in enumerate(scenario.prebooked):
+        session = SchedulingSession(default_policy(), f"prebooked-{scenario.id}-{n}")
+        session.update(
+            {
+                "patient": {"is_new_patient": False, "has_referral": True},
+                "service_id": p.service_id,
+                "provider_id": p.provider_id,
+                "location_id": p.location_id,
+            }
+        )
+        day = p.start.date()
+        starts = [s.start for s in calendar.slots(p.service_id, p.provider_id, p.location_id, day)]
+        if p.start not in starts:
+            raise ValueError(f"{scenario.id}: prebooked time {p.start} isn't open")
+        # Offer up to the wanted time, so it's the latest offer and can be selected.
+        offer = session.offer_times(calendar, day, limit=starts.index(p.start) + 1)
+        session.update({"slot_id": offer.slots[-1].id})
+        session.confirm(session.state.revision)
+        session.book(calendar, session.state.revision)
 
 
 def load_scenarios(path: Path = SCENARIOS_PATH) -> list[Scenario]:

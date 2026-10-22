@@ -6,7 +6,7 @@ PYTHON := $(VENV)/bin/python
 GENERATED := frontend/src/generated
 JSON2TS := npm --prefix frontend exec -- json2ts --unreachableDefinitions --unknownAny --no-additionalProperties
 
-.PHONY: help install lock dev run web test types check-types clean
+.PHONY: help install lock dev run web test eval types check-types clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -37,6 +37,9 @@ web: ## Run the builder frontend (http://localhost:5173; needs `make run`)
 test: ## Run the backend and frontend tests
 	cd backend && .venv/bin/python -m pytest -q
 	npm --prefix frontend test
+
+eval: ## Run the naive vs tools benchmark (calls the OpenAI API: needs OPENAI_API_KEY and costs usage); options via EVAL_ARGS="--k 1 --scenarios chen_paging"
+	cd backend && .venv/bin/python -W ignore -m eval $(EVAL_ARGS)
 
 types: ## Regenerate the frontend's TypeScript types from the backend's JSON Schema
 	cd backend && .venv/bin/python -W ignore contract.py > ../$(GENERATED)/contract.schema.json

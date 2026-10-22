@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig, IssuesResponse } from "../../generated/contract";
 import * as d from "../document";
-import { type Validation, createValidator } from "../validation";
+import { type Validation, createValidator, issueSelection } from "../validation";
 import { agent } from "./fixtures";
 
 const issue = (message: string) => ({
@@ -54,5 +54,27 @@ describe("live validation", () => {
 
     const done = results.filter((r) => r.status === "done");
     expect(done).toEqual([{ status: "done", issues: [issue("new")], malformed: false }]);
+  });
+});
+
+describe("issueSelection", () => {
+  const at = (...path: (string | number)[]) => ({ ...issue("x"), path });
+
+  it("routes an issue to what its path points at", () => {
+    expect(issueSelection(at("initial_node"))).toEqual({ kind: "agent" });
+    expect(issueSelection(at("persona"))).toEqual({ kind: "agent" });
+    expect(issueSelection(at("nodes", 2, "name"))).toEqual({ kind: "node", node: 2 });
+    expect(issueSelection(at("nodes", 2, "edges", 1, "target"))).toEqual({ kind: "edge", node: 2, edge: 1 });
+  });
+
+  it("routes tool issues to the node and guard issues to the edge", () => {
+    expect(issueSelection(at("nodes", 1, "tools", 3))).toEqual({ kind: "node", node: 1 });
+    expect(issueSelection(at("nodes", 1, "tools"))).toEqual({ kind: "node", node: 1 });
+    expect(issueSelection(at("nodes", 4, "edges", 0, "guard"))).toEqual({ kind: "edge", node: 4, edge: 0 });
+  });
+
+  it("falls back to the agent or the node when the path is partial", () => {
+    expect(issueSelection(at("nodes"))).toEqual({ kind: "agent" });
+    expect(issueSelection(at("nodes", 0, "edges"))).toEqual({ kind: "node", node: 0 });
   });
 });

@@ -1,7 +1,7 @@
 """Replays the scheduling scenarios (backend/data/scenarios.json) step by step and
 checks each scenario's intended outcome against the resulting session state."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -9,7 +9,7 @@ from catalog.availability import Calendar
 from catalog.index import default_index
 from catalog.models import default_catalog
 from catalog.policy import default_policy
-from catalog.scenarios import check_outcome, default_scenarios
+from catalog.scenarios import check_outcome, default_scenarios, prebook
 from catalog.session import BookingError, InvalidUpdate, OfferResult, SchedulingSession
 
 SCENARIOS = default_scenarios()
@@ -152,3 +152,23 @@ def test_scenario(scenario):
 def test_scenario_ids_are_unique():
     ids = [s.id for s in SCENARIOS]
     assert len(ids) == len(set(ids))
+
+
+def test_prebooked_reservations_block_overlapping_times():
+    (scenario,) = [s for s in SCENARIOS if s.prebooked]
+    (held,) = scenario.prebooked
+    calendar = Calendar(default_catalog(), clock=lambda: scenario.now)
+    before = Replay(scenario).session("a")
+    before.update(scenario.steps[0].args)
+    free = before.offer_times(Calendar(default_catalog(), clock=lambda: scenario.now), held.start.date(), limit=50)
+
+    prebook(scenario, calendar)
+
+    end = held.start + timedelta(minutes=default_catalog().type_by_id[held.service_id].duration_min)
+    after = Replay(scenario).session("a")
+    after.update(scenario.steps[0].args)
+    offered = after.offer_times(calendar, held.start.date(), limit=50).slots
+    overlapping = [s for s in free.slots if s.start < end and held.start < s.end]
+    assert overlapping, "the prebooked time should overlap one of the caller's times"
+    assert not [s for s in offered if s.start < end and held.start < s.end]
+    assert len(offered) == len(free.slots) - len(overlapping)

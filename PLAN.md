@@ -173,7 +173,7 @@ Stretch goals:
 
 # Phase 2: Context management plan
 
-Status: M5–M8 are implemented (see [solution.md](solution.md#milestone-5-catalog-domain-and-policy-engine), [M6](solution.md#milestone-6-tools-and-builder-integration), [M7](solution.md#milestone-7-api-and-contract) and [M8](solution.md#milestone-8-frontend)); M9 is proposed work. The rationale and trade-offs are recorded in [solution.md](solution.md#phase-2-context-management-design).
+Status: M5–M9 are implemented (see [solution.md](solution.md#milestone-5-catalog-domain-and-policy-engine), [M6](solution.md#milestone-6-tools-and-builder-integration), [M7](solution.md#milestone-7-api-and-contract), [M8](solution.md#milestone-8-frontend) and [M9](solution.md#milestone-9-evaluation)); the benchmark's results are in [backend/eval/results.md](backend/eval/results.md). The rationale and trade-offs are recorded in [solution.md](solution.md#phase-2-context-management-design). M9 merged the scheduler's `find_service` and `choose_provider_location` nodes into one `choose_appointment` node; the M6 description below is the original plan.
 
 ## 1. Problem
 

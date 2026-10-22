@@ -279,7 +279,7 @@ async def test_tool_calls_stay_in_the_node_and_report_state_changes():
     call = scheduler_call()
     await call.start()
     await call.call_function("start_booking", {})
-    assert call.events[-1]["node"] == "find_service"
+    assert call.events[-1]["node"] == "choose_appointment"
 
     found = await call.call_function("search_services", {"query": "knee MRI"})
     assert found["services"][0]["id"] == "appt_065"
@@ -287,9 +287,9 @@ async def test_tool_calls_stay_in_the_node_and_report_state_changes():
 
     result = await call.call_function("update_booking", {"service_id": "appt_065"})
     assert result["draft"]["service"]["id"] == "appt_065"
-    assert [e["node"] for e in call.events] == ["greeting", "find_service"]  # no new path step
+    assert [e["node"] for e in call.events] == ["greeting", "choose_appointment"]  # no new path step
     (update,) = call.updates
-    assert update["node"] == "find_service" and update["via"] == "update_booking"
+    assert update["node"] == "choose_appointment" and update["via"] == "update_booking"
     assert update["state"]["booking"]["draft"]["service_id"] == "appt_065"
     assert update["state"]["patient"] == {"is_new_patient": None, "has_referral": None}
 
@@ -299,16 +299,15 @@ async def test_a_failed_guard_leaves_the_node_and_state_alone():
     await call.start()
     await call.call_function("start_booking", {})
     await call.call_function("update_booking", {"service_id": "appt_065"})
-    await call.call_function("service_chosen", {})
-    assert call.flow_manager.current_node == "choose_provider_location"
+    assert call.flow_manager.current_node == "choose_appointment"
     state = copy.deepcopy(call.flow_manager.state)
 
     result = await call.call_function("choices_complete", {})
     assert result["status"] == "error" and result["guard"] == "booking_ready"
     assert result["next_question"]["field"] == "has_referral"
-    assert call.flow_manager.current_node == "choose_provider_location"
+    assert call.flow_manager.current_node == "choose_appointment"
     assert call.flow_manager.state == state
-    assert call.events[-1]["node"] == "choose_provider_location"
+    assert call.events[-1]["node"] == "choose_appointment"
 
 
 async def test_edges_cant_overwrite_tool_state():
@@ -328,7 +327,6 @@ async def test_scheduler_reaches_success_only_with_a_receipt():
     await call.call_function("start_booking", {})
     assert "update_booking" in call.tool_names and "book_appointment" not in call.tool_names
     await call.call_function("update_booking", {"service_id": "appt_065"})
-    await call.call_function("service_chosen", {})
     result = await call.call_function("update_booking", {"patient": {"has_referral": True, "is_new_patient": False}})
     assert result["check"]["next_question"]["field"] == "provider_id"
     await call.call_function("update_booking", {"provider_id": "prov_014", "location_id": "loc_004"})
@@ -352,7 +350,7 @@ async def test_scheduler_reaches_success_only_with_a_receipt():
     await call.call_function("booking_done", {})
 
     assert [e["node"] for e in call.events] == [
-        "greeting", "find_service", "choose_provider_location", "offer_times", "confirm", "success",
+        "greeting", "choose_appointment", "offer_times", "confirm", "success",
     ]  # fmt: skip
     assert call.events[-1]["state"]["booking"]["reservation"]["confirmation"] == receipt["confirmation"]
     assert any(isinstance(f, EndFrame) for f in call.timeline)
@@ -367,7 +365,6 @@ async def test_a_correction_at_confirm_invalidates_the_chosen_time():
         {"service_id": "appt_065", "provider_id": "prov_014", "location_id": "loc_004",
          "patient": {"has_referral": True, "is_new_patient": False}},
     )  # fmt: skip
-    await call.call_function("service_chosen", {})
     await call.call_function("choices_complete", {})
     times = await call.call_function("get_availability", {})
     picked = await call.call_function("update_booking", {"slot_id": times["slots"][0]["id"]})

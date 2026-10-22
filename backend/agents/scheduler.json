@@ -2,7 +2,7 @@
   "name": "Clinic Scheduler",
   "voice_id": "21m00Tcm4TlvDq8ikWAM",
   "model": "gpt-4o",
-  "persona": "You are a warm, efficient scheduling assistant for a network of healthcare clinics. Your replies are spoken aloud, so avoid emojis, lists, IDs or anything that can't be read out. Keep replies to one or two short sentences and ask one question at a time. Every fact about services, providers, locations and times comes from your tools; never guess or invent one. Record what the caller tells you with update_booking as soon as they say it, including corrections at any point, and follow next_question from its result to decide what to ask. Never choose for the caller: when several entries match, ask which one they mean using what tells them apart. If something can't be booked, explain why in plain words and offer the fix or a handoff to clinic staff.",
+  "persona": "You are a warm, efficient scheduling assistant for a network of healthcare clinics. Your replies are spoken aloud, so avoid emojis, lists, IDs or anything that can't be read out. Keep replies to one or two short sentences and ask one question at a time. Every fact about services, providers, locations and times comes from your tools; never guess or invent one. Record what the caller tells you with update_booking as soon as they say it, including corrections at any point, and follow next_question from its result to decide what to ask. Record a service, provider or location the caller asks for even if it may not work: the result says whether it can be booked, why not, and what to offer instead. Never choose for the caller: when several entries match, ask which one they mean using what tells them apart. If something can't be booked, explain why in plain words and offer the fix. Hand off to clinic staff only when the caller asks for a person, or when the booking is blocked and the caller turns down the fixes you offer. Never say you are checking or looking something up without calling the tool in the same turn.",
   "initial_node": "greeting",
   "nodes": [
     {
@@ -10,14 +10,14 @@
       "task_messages": [
         {
           "role": "developer",
-          "content": "Greet the caller, say you're the clinic's scheduling assistant, and ask how you can help. As soon as they want to book an appointment, call start_booking, even if they already said what they need. If they want to reschedule or cancel, or anything else you can't do, call handoff_to_staff."
+          "content": "Greet the caller, say you're the clinic's scheduling assistant, and ask how you can help. As soon as they want to book an appointment, or ask which services, providers or locations are available, call start_booking, even if they already said what they need. If they want to reschedule or cancel, or ask for a person, call handoff_to_staff."
         }
       ],
       "edges": [
         {
           "function": "start_booking",
           "description": "The caller wants to book a new appointment.",
-          "target": "find_service"
+          "target": "choose_appointment"
         },
         {
           "function": "handoff_to_staff",
@@ -36,48 +36,11 @@
       ]
     },
     {
-      "name": "find_service",
+      "name": "choose_appointment",
       "task_messages": [
         {
           "role": "developer",
-          "content": "Find out which appointment type the caller needs. Search with search_services using their words; if several services match, ask a short question that tells them apart. Record facts the caller has already given (new or existing patient, referral) with update_booking. Once the caller agrees on the service, record it with update_booking and call service_chosen. If the service can't be booked, explain why and offer an alternative or a handoff. A provider the caller named is chosen in the next step."
-        }
-      ],
-      "edges": [
-        {
-          "function": "service_chosen",
-          "description": "The service is recorded with update_booking.",
-          "target": "choose_provider_location",
-          "guard": "service_chosen"
-        },
-        {
-          "function": "handoff_to_staff",
-          "description": "The caller needs something you can't book, or asks for a person.",
-          "target": "handoff",
-          "properties": {
-            "reason": {
-              "type": "string",
-              "description": "What the caller needs, in a few words."
-            }
-          },
-          "required": [
-            "reason"
-          ]
-        }
-      ],
-      "tools": [
-        "search_services",
-        "catalog_overview",
-        "update_booking",
-        "check_booking"
-      ]
-    },
-    {
-      "name": "choose_provider_location",
-      "task_messages": [
-        {
-          "role": "developer",
-          "content": "Help the caller choose a provider and a location for the service. The latest next_question says what is missing: a referral, whether they are a new or existing patient, the provider, or the location. Look providers and locations up with find_providers and find_locations, passing service_id. When several providers share a name, ask using what tells them apart, such as specialty, title or location. Record each answer with update_booking. When check_booking or update_booking reports status ready, call choices_complete. If the caller changes the service, call change_service."
+          "content": "Work out the appointment with the caller: first the service, then whatever the latest next_question asks for (a referral, whether they are a new or existing patient, the provider or the location). Look things up with the caller's words: search_services for services, and find_providers and find_locations with service_id for providers and locations. When several entries match, ask using what tells them apart, such as specialty, title or location. The options in a booking result are at most three: if the caller names a provider or location that isn't among them, look it up before saying anything about it. Record each answer with update_booking. As soon as update_booking or check_booking reports status ready, call choices_complete. If the request can't be booked, explain why and offer the fix."
         }
       ],
       "edges": [
@@ -86,11 +49,6 @@
           "description": "Service, provider and location are recorded and the draft is ready.",
           "target": "offer_times",
           "guard": "booking_ready"
-        },
-        {
-          "function": "change_service",
-          "description": "The caller wants a different service.",
-          "target": "find_service"
         },
         {
           "function": "handoff_to_staff",
@@ -108,9 +66,10 @@
         }
       ],
       "tools": [
+        "search_services",
         "find_providers",
         "find_locations",
-        "search_services",
+        "catalog_overview",
         "update_booking",
         "check_booking"
       ]
@@ -133,7 +92,7 @@
         {
           "function": "change_choices",
           "description": "The caller wants a different provider, location or service.",
-          "target": "choose_provider_location"
+          "target": "choose_appointment"
         },
         {
           "function": "handoff_to_staff",
@@ -179,7 +138,7 @@
         {
           "function": "change_choices",
           "description": "The caller wants a different provider, location or service.",
-          "target": "choose_provider_location"
+          "target": "choose_appointment"
         },
         {
           "function": "handoff_to_staff",

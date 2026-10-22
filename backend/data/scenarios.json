@@ -355,6 +355,7 @@
       "details": []
     },
     "outcome": {"booked": [{"service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_001"}]},
+    "prebooked": [{"service_id": "appt_023", "provider_id": "prov_000", "location_id": "loc_000", "start": "2026-10-19T09:00:00-07:00"}],
     "steps": [
       {"op": "update", "args": {"patient": {"is_new_patient": false, "has_referral": true}, "service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_001"},
        "expect": {"status": "ready"}},
@@ -390,6 +391,83 @@
       {"op": "book", "args": {"confirm": false}, "expect": {"error": "NOT_CONFIRMED"}},
       {"op": "book", "args": {"revision": 1}, "expect": {"error": "STALE_REVISION"}},
       {"op": "update", "args": {"slot_id": {"offered": 1}}, "expect": {"revision": 3}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+    },
+  {
+    "id": "mission_blood_draw",
+    "description": "\"The Mission clinic\" matches Mission Bay and Mission District. Both have lab rooms, but the only lab provider works at Mission Bay, so Mission District has no feasible option.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I need to get blood work done at the Mission clinic.",
+      "details": ["I'm not sure which Mission one, whichever does blood draws."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_072", "provider_id": "prov_038", "location_id": "loc_000"}]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "blood work"}, "expect": {"ids": ["appt_072"], "ambiguous": false}},
+      {"op": "find_locations", "args": {"query": "the Mission clinic"}, "expect": {"ids": ["loc_000", "loc_001"], "ambiguous": true, "clarify": "name"}},
+      {"op": "update", "args": {"service_id": "appt_072"},
+       "expect": {"status": "needs_choice", "next": "provider_id", "total_options": 1, "options": [{"provider_id": "prov_038", "location_id": "loc_000"}]}},
+      {"op": "update", "args": {"location_id": "loc_001"}, "expect": {"status": "blocked", "violations": ["NO_FEASIBLE_OPTION"]}},
+      {"op": "update", "args": {"location_id": "loc_000"}, "expect": {"status": "needs_choice", "next": "provider_id"}},
+      {"op": "update", "args": {"provider_id": "prov_038"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "late_location_change",
+    "description": "After times are offered and one is picked, the caller moves to another of the provider's locations: the provider stays, and the picked time is cleared.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "Can I book a flu shot with Dr. Nina Nguyen at the Downtown clinic?",
+      "details": ["Actually, could we do Midtown instead? It's closer to my work."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_011", "provider_id": "prov_016", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "find_providers", "args": {"name": "Dr. Nguyen"}, "expect": {"total": 8, "ambiguous": true, "clarify": "specialty", "truncated": true}},
+      {"op": "find_providers", "args": {"name": "Nina Nguyen"}, "expect": {"ids": ["prov_016"], "ambiguous": false}},
+      {"op": "update", "args": {"service_id": "appt_011", "provider_id": "prov_016", "location_id": "loc_004"}, "expect": {"status": "ready", "revision": 1}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"revision": 2}},
+      {"op": "update", "args": {"location_id": "loc_005"},
+       "expect": {"status": "ready", "cleared": ["slot_id"], "draft": {"provider_id": "prov_016", "location_id": "loc_005", "slot_id": null}}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "repeated_searches",
+    "description": "The caller asks about several services before choosing one that needs no referral: repeated searches and a blocked first choice add context before the booking starts.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "Hi, do you do allergy testing? And what about travel shots?",
+      "details": [
+        "I don't have a referral.",
+        "I've been to your clinics before.",
+        "Then let's just do a flu shot at the Sunset clinic, with whoever is available."
+      ]
+    },
+    "outcome": {"booked": [{"service_id": "appt_011", "location_id": "loc_006"}]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "allergy testing"}, "expect": {"ids": ["appt_081"], "ambiguous": false}},
+      {"op": "search_services", "args": {"query": "travel shots"}, "expect": {"ids": ["appt_010", "appt_013"], "ambiguous": true}},
+      {"op": "update", "args": {"service_id": "appt_081"}, "expect": {"status": "needs_choice", "next": "has_referral"}},
+      {"op": "update", "args": {"patient": {"has_referral": false}}, "expect": {"status": "blocked", "violations": ["REFERRAL_REQUIRED"]}},
+      {"op": "search_services", "args": {"query": "flu shot"}, "expect": {"ids": ["appt_011"]}},
+      {"op": "update", "args": {"service_id": "appt_011", "location_id": "loc_006"}, "expect": {"status": "needs_choice", "next": "is_new_patient", "total_options": 4}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}}, "expect": {"status": "needs_choice", "next": "provider_id"}},
+      {"op": "update", "args": {"provider_id": "prov_021"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
       {"op": "book", "expect": {"booked": true}}
     ]
   }

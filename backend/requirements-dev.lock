@@ -192,7 +192,9 @@ numpy==2.5.4 ; python_full_version >= '3.12'
 onnxruntime==1.24.4
     # via pipecat-ai
 openai==2.54.0
-    # via pipecat-ai
+    # via
+    #   -r requirements.txt
+    #   pipecat-ai
 opencv-python==4.14.0.94
     # via pipecat-ai
 opentelemetry-api==1.45.1

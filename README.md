@@ -76,7 +76,7 @@ Ids are 1–64 lowercase letters, digits, `_` or `-`. Each issue is `{level, pat
 
 ### The scheduler agent (Phase 2)
 
-`backend/agents/scheduler.json` books against the clinic catalog through tools instead of a catalog in the prompt: greeting → find_service → choose_provider_location → offer_times → confirm → success, with a `handoff` end node for anything it can't book. Open it in the builder and test-call it like any agent.
+`backend/agents/scheduler.json` books against the clinic catalog through tools instead of a catalog in the prompt: greeting → choose_appointment → offer_times → confirm → success, with a `handoff` end node for anything it can't book. Open it in the builder and test-call it like any agent.
 
 - **Node tools.** A node's `tools` lists the catalog tools it exposes besides its edges (`search_services`, `find_providers`, `find_locations`, `update_booking`, `check_booking`, `get_availability`, `book_appointment`, `catalog_overview`). A tool runs without leaving the node; when it changes the booking, the call panel's collected state updates from a `state_updated` server message (not a path step).
 - **Edge guards.** An edge's optional `guard` names a check that must pass first (`service_chosen`, `booking_ready`, `slot_selected`, `booking_completed`). A failed guard keeps the node active and tells the model what's missing. `success` is entered only through `booking_completed`, i.e. after a real reservation.
@@ -109,6 +109,15 @@ The catalog screen and its tool playground use these routes. The playground runs
 - Playground bookings stay in their sandbox: they never reach a voice call's session or the voice calendar, and reset on restart.
 - `approx_tokens` is an estimate (about 4 characters a token) of the result's size, not a tokenizer count.
 
+### Evaluation (Phase 2)
+
+`make eval` runs the scheduler against a simulated caller for each scenario in `backend/data/scenarios.json`, in two modes: **naive** (the whole catalog in the system prompt, no search tools) and **tools** (the checked-in scheduler). Both modes use the same graph, guards, booking tools and validator, model, caller and calendar; only catalog access differs. The latest results are in [`backend/eval/results.md`](backend/eval/results.md), and [solution.md](solution.md#milestone-9-evaluation) discusses them.
+
+- It calls the OpenAI API, so it needs `OPENAI_API_KEY` in `backend/.env` and costs real usage: the full run (20 scenarios × 2 modes × 3 repetitions) was about $21 at the assumed prices.
+- `make eval EVAL_ARGS="--k 1 --scenarios chen_paging,mission_blood_draw --modes tools"` runs a subset; `--model` and `--caller-model` pick the models (default: the agent's `gpt-4o`, and `gpt-4o-mini` for the caller), and `--out DIR` writes somewhere other than `backend/eval/`.
+- Each conversation gets a fresh session and calendar (plus any reservations the scenario says other callers hold). A run counts as correct only if the session ends with the intended reservation, or blocked for the intended reason, and the booking doesn't violate policy for the caller's true facts; what the agent says doesn't count.
+- Output: `results.md` (the comparison), `results.json` (per-run metrics) and `runs/<run id>/traces.jsonl` (every conversation: transcript, tool calls with results, token usage and latency per model call).
+
 ### Development
 
 `make test` runs the backend (pytest) and frontend (vitest) tests. `make types` regenerates the frontend's TypeScript types (`frontend/src/generated/`) from the backend's JSON Schema, and `make check-types` fails if they're stale. Python dependencies install from `backend/requirements-dev.lock`; `make lock` re-resolves it with [uv](https://docs.astral.sh/uv/) after a deliberate change to `requirements*.txt`.
@@ -125,6 +134,7 @@ The catalog screen and its tool playground use these routes. The playground runs
 | `backend/catalog/` | The Phase 2 catalog domain, with no Pipecat or HTTP dependency: `models.py` (the typed, immutable catalog and caller facts), `index.py` (free-text matching with aliases, ambiguity and paging), `policy.py` (the booking rules: feasible options, violations with fixes, the next question), `availability.py` (a deterministic mock calendar with atomic, idempotent reservations), `session.py` (one caller's facts, draft, offers and booking), `tools.py` (the scheduler's tools and edge guards: argument and result models, handlers and LLM schemas, shared by every adapter), `lint.py` (catalog health checks) and `scenarios.py` (fixtures for the tricky cases). |
 | `backend/catalog_api.py` | The HTTP adapter: the `/api/catalog` routes, and the playground's sandbox sessions, each with its own calendar. |
 | `backend/catalog_voice.py` | The voice adapter: binds the catalog tools and guards into a `Registry`, keeping each call's session in `flow_manager.state["patient"]` and `["booking"]`. |
+| `backend/eval/` | The naive vs tools benchmark (`make eval`): `flow.py` runs a compiled agent graph as text, `caller.py` is the simulated caller, `run.py` runs and scores one conversation, `report.py` writes `results.md`. |
 | `backend/contract.py` | The backend/frontend JSON Schema contract (`make types`). |
 | `backend/tests/` | pytest suite (`make test`). |
 | `frontend/` | The builder UI (Vite + React + TS). `src/editor/` holds the document model: pure document actions, the undoable Zustand store, layout, validation, keyboard shortcuts and the agent flows (open, save, import/export, test call). `src/components/` holds the canvas (React Flow), inspector, JSON view, call panel and the catalog screen (tables, lint, tool playground). `src/catalog/` holds the catalog screen's logic: shared loading of the catalog routes, tool forms generated from tool schemas, and lint/cross-link navigation. Test calls use `@pipecat-ai/client-js` over SmallWebRTC through the Vite proxy. `src/generated/` holds the generated contract types. |
