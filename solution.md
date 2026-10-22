@@ -45,7 +45,7 @@ Provider, service and location compatibility, referrals, new-patient eligibility
 **2. A guided narrowing loop instead of free-form search.**
 `update_booking` records choices and returns `next_question` and at most three feasible options. The order is fixed: service first, then any patient fact a remaining option depends on (referral, then new-patient status), then provider, then location. For a knee MRI with an existing patient, the provider question lists exactly the two valid provider/location combinations.
 
-The current scheduler also exposes `apply_request`, which combines name lookup and the draft update in one model tool call. It resolves all supplied names before applying a single update through the same session logic. Multiple matches and weak matches require clarification; nothing changes until the caller's choices are resolved. Identity lookup does not filter by booking policy, so a named but incompatible choice is recorded and explained rather than replaced. The existing automatic transition then fetches availability when the draft becomes ready. The benchmark below predates this optimization; a scripted graph test demonstrates two fewer model calls for one booking path, but live cost and accuracy still need measurement.
+The current scheduler also exposes `apply_request`, which combines name lookup and the draft update in one model tool call. It resolves all supplied names before applying a single update through the same session logic. Multiple matches and weak matches require clarification; nothing changes until the caller's choices are resolved. Identity lookup does not filter by booking policy, so a named but incompatible choice is recorded and explained rather than replaced. The existing automatic transition then fetches availability when the draft becomes ready. The benchmark below includes this optimization. Against the previous run it cut tools-mode input tokens per conversation from 41.9k to 26.1k and scheduler calls from 18.0 to 11.2, with no loss in accuracy.
 
 - Patient facts are **true, false or unknown**. An unknown fact becomes a *condition* on an option rather than a pass or a fail, and a fact is asked only when it changes the result. Treating a missing value as false would classify an unknown caller as an existing patient.
 - The engine never picks for the caller, even when only one option is left.
@@ -107,25 +107,29 @@ The Catalog screen has tables of locations, providers and appointment types with
 
 Both modes use the same graph, guards, booking validator, model (`gpt-4o`), caller and calendar. The harness drives the compiled agent graph as text, so it measures what a call runs.
 
-A run is scored on the **final session state, not the transcript**. It passes if the intended reservation exists, or the draft is blocked for the intended reason, and the booking doesn't violate policy for the caller's *true* facts. Scoring the transcript would have missed two runs where the model told the caller "you're confirmed" without booking.
+A run is scored on the **final session state, not the transcript**. It passes if the intended reservation exists, or the draft is blocked for the intended reason, and the booking doesn't violate policy for the caller's *true* facts. Scoring the transcript would have missed four runs (two per mode, all in `upstream_conflict_kept`) where the model told the caller "you're confirmed" without booking.
 
 ### Results (20 scenarios × 3 repetitions × 2 modes)
 
 | | naive | tools |
 |---|---|---|
-| Intended outcome reached | 48/60 (80%) | 47/60 (78%) |
-| Wrong bookings | 9 | 6 |
-| Scheduler input tokens per conversation (mean) | 171,763 (84% cached) | 41,862 (25% cached) |
-| Prompt size, first → last call (mean) | 8,703 → 11,105 | 382 → 2,813 |
-| Est. scheduler cost per conversation | $0.25 | $0.10 |
-| Latency per model call, p50 / p95 | 0.80s / 1.24s | 0.76s / 1.14s |
+| Intended outcome reached | 53/60 (88%) | 54/60 (90%) |
+| Scenarios correct in every run | 14/20 | 17/20 |
+| Wrong bookings | 3 | 2 |
+| Scheduler LLM calls per conversation (mean) | 10.3 | 11.2 |
+| Scheduler input tokens per conversation (mean) | 104,190 (87% cached) | 26,136 (34% cached) |
+| Prompt size, first → last call (mean) | 9,171 → 10,541 | 1,552 → 2,438 |
+| Largest prompt | 13,441 | 5,654 |
+| Est. scheduler cost per conversation | $0.15 | $0.06 |
+| Latency per model call, p50 / p95 | 0.85s / 1.24s | 0.85s / 1.14s |
 
 What the numbers show:
 
-- **Correctness is a tie at k=3**, because both modes share the policy engine. Neither mode made a booking that violated policy, which is the point of the guardrails.
-- **The two modes fail differently.** Naive's misses are catalog-reading errors: an MRI - Spine booked for a knee, "Sunset has no dermatology" when a dermatologist practises there, a wrong patient fact recorded. Its updates hit a blocked draft 27 times, against 8 for tools, so the validator caught many bad IDs before they became bookings. Tools' misses are about conversation policy: handing off after a real block without recording the request, and reusing an earlier search result.
-- **Cost: 4.1× fewer input tokens, but only 2.6× cheaper.** OpenAI caches naive's stable catalog prefix, so the uncached input of the two modes is similar (26.6k vs 31.2k). Tools caches only 25%, because the tool list changes between nodes and that invalidates the prefix.
-- **Scale is where the gap opens.** Naive's prompt never drops below 8.7k tokens and grows with the catalog. Each tools result stays under 400 tokens whatever the catalog size.
+- **Correctness is still a tie at k=3**, because both modes share the policy engine. Tools is a little ahead (54 vs 53 runs, 17 vs 14 scenarios correct in every run), but that gap is within noise. Neither mode made a booking that violated policy or recorded a wrong patient fact, which is the point of the guardrails.
+- **The two modes fail differently.** Naive's misses are catalog-reading errors: three bookings of the right service with the wrong provider or location, one run that looped until the turn limit, and one handoff with nothing booked. Tools' misses are about conversation state. In `correction_service`, two runs lost the caller's location ("Midtown is fine") after two service corrections and booked Downtown. In `upstream_conflict_kept`, after the caller asked about another location and came back, the model tried to pick slots from the earlier offer. The validator refused them as no longer offered for the current choices, and the model then either told the caller they were booked or handed off. In `ophthalmology_not_offered`, one run offered staff and handed off as "staff requested", which skips the `request_recorded` guard, so the `NOT_OFFERED` block was never recorded.
+- **Bad tool calls are refused, not booked.** Tools logged 11 tool errors: 8 `apply_request` calls that sent both text and an ID for the same field, and 3 stale slot IDs. Each was rejected with "Nothing was changed", and none turned into a bad booking.
+- **Cost: 4.0× fewer input tokens, but only 2.6× cheaper.** OpenAI caches naive's stable catalog prefix, so tools actually sends more uncached input (17.4k vs 13.4k per conversation). Tools caches only 34%, because the tool list changes between nodes and that invalidates the prefix.
+- **Scale is where the gap opens.** Naive's prompt starts at about 9.2k tokens and grows with the catalog. Tools' largest prompt is 5.7k, and each tools result stays under 400 tokens whatever the catalog size.
 
 ### What the benchmark changed
 
@@ -137,7 +141,7 @@ The smoke runs found a structural defect. The original graph split "find service
 
 - **Prompt size doesn't depend on catalog size.** Results are capped and paged. A catalog ten times larger means more pages in the rare ambiguous case, not a larger prompt.
 - **Matching scales with filtering first.** Explicit filters (service, location, specialty) narrow candidates before ranking. At this size, in-memory filtering over cached immutable indexes is enough. A much larger catalog would put the same tool contract in front of a search index. The model-facing tool interface wouldn't change.
-- **Context growth within a call is the remaining cost.** Pipecat Flows appends every node's instructions and every tool result, so long correction-heavy calls reach about 158k input tokens in total. The cheaper fix is caching: keep a stable tool list across nodes and enforce what can run where with guards rather than by hiding tools. That trades away per-node tool scoping and should be measured before adding a summary step.
+- **Context growth within a call is the remaining cost.** Pipecat Flows appends every node's instructions and every tool result, so the longest correction-heavy call reached about 92k input tokens in total (240k in naive mode). The cheaper fix is caching: keep a stable tool list across nodes and enforce what can run where with guards rather than by hiding tools. That trades away per-node tool scoping and should be measured before adding a summary step.
 
 ## Scoping
 
@@ -149,8 +153,9 @@ The smoke runs found a structural defect. The original graph split "find service
 
 ## Remaining work
 
-- A held-out scenario set, and more repetitions. k=3 can't separate 80% from 78%.
-- Enforce "record the request before handing off" with a guard on `handoff`, rather than a prompt rule.
+- A held-out scenario set, and more repetitions. k=3 can't separate 88% from 90%.
+- Close the `staff_requested` path around the `request_recorded` guard. Right now the model can offer staff itself, and the caller's "yes" lets it hand off without recording the block.
+- After `change_choices`, re-offer times automatically or keep the earlier offer valid when the choices end up unchanged, so the model doesn't reach for stale slot IDs (`upstream_conflict_kept`).
 - Stop false "you're booked" claims with a post-check on the confirm node's reply.
 - Try caching-friendly tool exposure, and add a state summary only if longer calls make it necessary.
 - Place a live voice call with the merged scheduler. It's tested through the real FlowManager and the text benchmark, but speech recognition errors and interruptions aren't covered.
