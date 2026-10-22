@@ -111,7 +111,7 @@ The catalog screen and its tool playground use these routes. The playground runs
 
 ### Evaluation (Phase 2)
 
-`make eval` runs the scheduler against a simulated caller for each scenario in `backend/data/scenarios.json`, in two modes: **naive** (the whole catalog in the system prompt, no search tools) and **tools** (the checked-in scheduler). Both modes use the same graph, guards, booking tools and validator, model, caller and calendar; only catalog access differs. The latest results are in [`backend/eval/results.md`](backend/eval/results.md), and [solution.md](solution.md#milestone-9-evaluation) discusses them.
+`make eval` runs the scheduler against a simulated caller for each scenario in `backend/data/scenarios.json`, in two modes: **naive** (the whole catalog in the system prompt, no search tools) and **tools** (the checked-in scheduler). Both modes use the same graph, guards, booking tools and validator, model, caller and calendar; only catalog access differs. The latest results are in [`backend/eval/results.md`](backend/eval/results.md), and [solution.md](solution.md#evaluation) discusses them.
 
 - It calls the OpenAI API, so it needs `OPENAI_API_KEY` in `backend/.env` and costs real usage: the full run (20 scenarios × 2 modes × 3 repetitions) was about $21 at the assumed prices.
 - `make eval EVAL_ARGS="--k 1 --scenarios chen_paging,mission_blood_draw --modes tools"` runs a subset; `--model` and `--caller-model` pick the models (default: the agent's `gpt-4o`, and `gpt-4o-mini` for the caller), and `--out DIR` writes somewhere other than `backend/eval/`.

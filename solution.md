@@ -1,636 +1,154 @@
 # Solution Overview
 
-Phase 1 builds a voice agent builder on top of the existing Pipecat stack. [PLAN.md](PLAN.md) has the full plan; this file records the choices made while implementing it and what they cost. M1 proved the browser call path, M2 added the document contract and persistence, M3 built the graph editor, and M4 made it something you can clone and run.
+The deliverable is a voice agent builder on top of the existing Pipecat stack (Phase 1), plus a scheduling agent that handles the large catalog through tools and a deterministic policy engine instead of a prompt dump (Phase 2). A benchmark compares that agent with the naive "whole catalog in the prompt" baseline. [PLAN.md](PLAN.md) has the full plan, [README.md](README.md) explains how to run everything, and [`backend/eval/results.md`](backend/eval/results.md) has the benchmark results.
 
-The [Phase 2 section](#phase-2-context-management-design) records the context-management design and its rationale. [Milestone 5](#milestone-5-catalog-domain-and-policy-engine) implements its domain core and [Milestone 6](#milestone-6-tools-and-builder-integration) the tools and the scheduler agent, [Milestone 7](#milestone-7-api-and-contract) the catalog API, and [Milestone 8](#milestone-8-frontend) the catalog screen and the editor's tool and guard controls, and [Milestone 9](#milestone-9-evaluation) the naive vs tools benchmark and its results.
+## Phase 1: Voice Agent Builder
 
-## Milestone 1: browser integration
+A React Flow graph editor for agent documents: nodes, edges, a form inspector, a raw JSON view, undo/redo, import/export, save, validation, and a test call panel that highlights the active node and the edges taken during a live call.
 
-### One process for the API and the calls
+Key decisions:
 
-The builder routes are registered on the Pipecat dev runner's own FastAPI `app` (`pipecat.runner.run.app`) before `main()` runs, so the API and the WebRTC signalling share port 7860.
+- **Each test call carries its draft.** The UI sends the unsaved document in the `/start` body and the backend compiles it for that call. Edits can be tested without saving or restarting, and the server validates exactly what will run. An invalid draft is refused before WebRTC setup with a readable error. It never quietly falls back to the example agent.
+- **Saving a draft and running it are different.** Any well-formed document can be saved, so half-finished work isn't lost. A document with graph errors can't be run.
+- **Lossless document handling.** The Pydantic models keep unknown fields, and every edit is a pure function on the document, so hand edits and fields the UI doesn't understand survive editing, saving and export. Each undo step is one user action.
+- **The document is locked during a call**, so the canvas can't drift from what the call is running.
+- **One process, one contract.** The builder API is registered on the Pipecat runner's own FastAPI app, so there is no second server and no CORS. One JSON Schema generates the frontend types, and the tests fail if they drift.
 
-- **Why:** no second server, no CORS setup, and the runner's `/start` → `/sessions/{id}/api/offer` flow works unchanged through the Vite proxy.
-- **Tradeoff:** it relies on the runner creating `app` at module level and adding its routes inside `main()`. That holds in pipecat-ai 1.4.0 but isn't a documented extension point. If it changes, the fallback is a small FastAPI app of our own that mounts the runner's routes.
+Tradeoffs:
 
-### Each call carries its agent
+- **Live node tracking hooks private Pipecat Flows methods**, because Flows has no public node-change callback. That makes it the most fragile part of the system. The dependency is pinned to 1.4.0, and a test drives the real FlowManager transition path to catch changes.
+- **Storage is one JSON file per agent with atomic writes and no locking.** The last write wins, which is fine for a single-user local tool.
 
-The UI sends the draft inline in the `/start` body (`{agent: <snapshot>}`), and `bot()` compiles it on every call.
+## Phase 2: Context Management
 
-- **Why:** you can test unsaved edits with no save and no restart, and the server validates exactly what will run.
-- **Tradeoff:** the whole document travels with every call. That's negligible at this size.
-- An explicit selection that's invalid is an error and never falls back to the example. A silent fallback would make a broken draft look like it works.
+### The approach in one sentence
 
-### A `/start` preflight
+The model interprets what the caller means, and code decides what can be booked. The agent never sees the catalog. It calls a few search and booking tools that return small, capped projections, and a deterministic policy engine narrows the options, enforces the booking rules and tells the model what to ask next.
 
-HTTP middleware checks the agent selection on `POST /start` and returns 422 before any WebRTC setup. `bot()` checks it again, because `/api/offer` can be called directly.
+### What makes the catalog hard
 
-- **Why:** without the preflight, a bad draft would produce a peer connection that silently drops, instead of a readable error in the call panel.
-- **Tradeoff:** the request body is parsed twice, once by the middleware and once by the runner, and the agent is compiled twice. Both are cheap.
+The catalog analysis drove the design:
 
-### Node tracking hooks FlowManager internals
+- **Duplicate and confusable names.** Seven providers match "Dr. Chen", 13 NPs/PAs are titled "Dr.", and two pairs of locations have similar names ("Mission Bay" / "Mission District").
+- **Specialty labels mislead.** Whether a provider can perform a service comes from explicit appointment-type IDs plus the location's capabilities. Matching on specialty strings rejects valid combinations.
+- **Policies interact.** Referrals, new-patient rules, capability-gated services and providers at several locations combine into 760 valid service/provider/location triples. Some drafts pass every pairwise rule and still have no valid completion, for example a cardiology consultation at a location with no cardiologist.
+- **Some requests can never be booked.** A catalog lint found 8 appointment types no provider can deliver and 6 new-patient dead ends. The agent has to explain those, not invent a booking.
 
-Pipecat Flows has no public node-change callback, and an edge handler returning `(result, next_node)` only *proposes* a transition. `TrackingFlowManager` overrides `_execute_transition`, `_set_node` and `_execute_actions`. It reports `node_entered` once the node's context and tools are in place, and before its post-actions run, so a terminal node is reported before `end_conversation` hangs up. A node whose activation fails is never reported.
+### Key decisions and tradeoffs
 
-- **Why:** reporting from the edge handler would highlight nodes that never actually activated.
-- **Tradeoff:** these are private methods, so this is the most fragile part of the system. It is pinned to pipecat-ai-flows 1.4.0, and `tests/test_runtime.py` drives the real FlowManager transition path to catch drift. That package is also deprecated in favour of `pipecat.flows`, so migrating is a known future cost.
-- The event carries `from`, `via` (the function called) and a JSON snapshot of `state`. `from` plus `via` identify the edge taken even when function names repeat across nodes. The snapshot stops later state changes from leaking into an event that was already sent.
+**1. Deterministic policy in code, interpretation in the model.**
+Provider, service and location compatibility, referrals, new-patient eligibility and slot availability are pure Python (`backend/catalog/`). The model works out intent from the conversation.
 
-### Holding messages until the client is ready
+- *Why:* checking constraints is exactly what an LLM does unreliably over a long list, and exactly what code does perfectly.
+- *Tradeoff:* a booking that follows policy can still be the wrong appointment for the caller. Guardrails don't prove the request was understood, so the evaluation scores intent separately from policy violations.
 
-Flow initialization (on transport connect) and the RTVI client-ready handshake can finish in either order. `ClientReadyGate` queues server messages and errors until the client is ready, then sends them in order.
+**2. A guided narrowing loop instead of free-form search.**
+`update_booking` records choices and returns `next_question` and at most three feasible options. The order is fixed: service first, then any patient fact a remaining option depends on (referral, then new-patient status), then provider, then location. For a knee MRI with an existing patient, the provider question lists exactly the two valid provider/location combinations.
 
-- **Why:** without it, the initial `node_entered` or a startup error could be sent before the client is listening, and lost.
-- **Tradeoff:** a little coordination code, instead of relying on event ordering that isn't guaranteed.
+- Patient facts are **true, false or unknown**. An unknown fact becomes a *condition* on an option rather than a pass or a fail, and a fact is asked only when it changes the result. Treating a missing value as false would classify an unknown caller as an existing patient.
+- The engine never picks for the caller, even when only one option is left.
 
-### Failures end the call cleanly
+**3. Small results that still reach every candidate.**
+Search uses lexical matching with curated aliases and tiered ranking (exact, alias, all words, fuzzy), with a minimum match score so it can say "no match". It returns at most 5 cards, plus `total_matches`, an `ambiguous` flag, `clarify` (the attribute that tells the matches apart), `next_cursor` for paging, and `excluded` with reasons.
 
-Startup and transition failures are sent to the client as RTVI errors. The call ends only after that error is delivered, and the peer connection is released on every failure path.
+- *Why:* a top-5 list without paging can make the intended provider unreachable when seven of them are called Chen. Ambiguity is computed before truncation, and filters run before the cap.
+- A named provider who can't work is **explained, never silently replaced** ("doesn't offer MRI - Knee").
+- *Tradeoff:* the metadata and follow-up searches cost some tokens and turns, in exchange for full recall. Lexical matching misses spellings that sound alike but look different ("Win" for Nguyen). The aliases cover common cases without an embedding dependency.
 
-- **Why:** the user sees why the call ended, and another call can start straight away.
-- **Tradeoff:** a failed transition ends the call rather than retrying or staying on the current node. That's simpler, and the right default for a test tool.
+**4. A token budget on every tool result.**
+Results are projections, not catalog entities: IDs, the fields that tell candidates apart, and labels the model can read aloud. Fields at their defaults are omitted. Tests enforce a 400-token cap on every result. Most results are 50–200 tokens. The largest is about 380 tokens, the first "Dr. Chen" page.
 
-### The frontend call client
+- *Tradeoff:* names are repeated next to IDs in each result, so the model never has to recall an ID from earlier in the context.
 
-There's a fresh `PipecatClient` for each call, and events from a previous client are ignored. A reducer holds the call state: status, transcript, path and microphone. Every exit (hang-up, failed start, server disconnect, leaving the page) goes through one idempotent `release()`.
+**5. Corrections: the newest explicit choice wins, and only downstream choices are cleared.**
+The order is facts, then service, then provider, then location, then slot. A correction clears a later choice only if it now conflicts, and every cleared field comes back with the reason, so the agent can explain it. A fact change never clears the service. If the caller turns out to have no referral, the MRI stays and the draft is blocked with `REFERRAL_REQUIRED`.
 
-- **Why:** stale events from a torn-down call can't corrupt the next call, and the microphone is always released.
-- **Tradeoff:** a client is recreated per call instead of reused. The cost is negligible.
-- Bot transcript text uses sentence-level `bot-output` events, deduplicated by segment ID. Word-level events repeat the same text.
+- *Tradeoff:* "newest wins" sometimes drops a choice the caller still wanted. It's predictable and always reported. The alternative, refusing the correction, makes the caller repeat themselves.
 
-### Deliberately minimal UI
+**6. Booking only after a confirmed draft revision, enforced by graph guards.**
+Exposing a booking tool doesn't mean the model calls it, and reaching the "success" node doesn't mean anything was booked. Edges can name a **guard** (`booking_ready`, `slot_selected`, `booking_completed`) that the builder runs before the transition. `book_appointment` needs the current draft revision and an explicit confirmation, and the success node can only be entered after a receipt exists. Booking is idempotent, and the reservation is atomic: eight threads booking the same slot produce one receipt.
 
-M1 is a raw JSON textarea plus the call panel: no React Flow, no saving. Editing is locked from the moment a call starts until it is torn down.
+- The guards are generic. The document names them as strings, and the builder gets them from an injected registry, so the graph compiler knows nothing about scheduling.
+- *Tradeoff:* a transition attempted too early costs a round trip. That's cheaper than a confirmation step the model can leave without booking.
 
-- **Why:** prove the risky integration (client-js, SmallWebRTC through the proxy, transition-event timing) before building the editor on top of it.
-- **Tradeoff:** throwaway UI. The call hook (`testCall.ts`) is meant to carry over to M3.
+**7. Each node gets only the tools it needs.**
+`book_appointment` exists only in the `confirm` node, and searches aren't offered once a time is being chosen. This keeps the tool schemas small and the booking step explicit. Every node after the greeting keeps `update_booking` and `check_booking`, so corrections work anywhere.
 
-## Milestone 2: contract and persistence
+- *Tradeoff:* the tool list changes between nodes, which breaks prompt caching (see Results).
 
-### Pydantic models that keep unknown data
+**8. One domain core behind three adapters.**
+The voice call, the HTTP playground in the UI and the evaluation harness all call the same `Tool.run`. A test checks that all three give identical results and leave the same session state. Validation can't drift between what is demoed, what is measured and what runs on a call.
 
-`schema.py` uses typed Pydantic models. Every model accepts extra fields and keeps them (`extra="allow"`), and documents are written back with `exclude_unset`, so a saved file matches what was written (no defaults are injected).
+### Alternatives considered
 
-- **Why:** imports, hand edits and fields the forms don't understand survive parsing and saving, as the plan requires.
-- **Tradeoff:** a typo such as `taks_messages` is kept silently. To compensate, validation warns about extra fields on the agent, nodes, edges and positions that the runtime doesn't use. Extra fields on messages, actions and property schemas are passed to Pipecat or the LLM verbatim, so they aren't flagged.
-- Strict mode is on, so JSON values aren't coerced (`"true"` is not a boolean). This is stricter than Pydantic's default, but bad field shapes can't be saved.
+- **Whole catalog in the prompt (the naive approach).** Built as the benchmark baseline, with the same policy engine behind it, so catalog access is the only variable.
+- **Embeddings or RAG.** Not needed at this size. Lexical matching with aliases is deterministic, needs no dependency or index, and recovers duplicates through paging. Embeddings would be justified by a measured matching failure, which the benchmark didn't show.
+- **An LLM summary of the context at node boundaries.** Deferred. Growth is measured, but it doesn't hurt latency yet, and a summary risks dropping unresolved preferences. One tools-mode failure was already caused by a stale earlier search being reused.
+- **Prompt-only policy.** Rejected. There would be nothing to refuse a bad booking, and nothing to measure violations against.
 
-### Malformed actions still save
+### What's mocked
 
-`tts_say` and `end_conversation` have their own models. Anything else, including a malformed supported action such as `tts_say` with no `text`, parses as a generic `Action`. A custom discriminator decides which model applies.
+- **Availability.** It's generated from a SHA-256 hash of (provider, location, date), so it's stable across runs and processes. The window is 14 days of weekday slots at each service's duration. Reservations take up the provider's time across all locations, so overlapping bookings are refused.
+- **Patient facts** are values the caller states. There's no patient database or referral check.
+- **The calendar is in memory, in one process.** There's no persistence, distributed locking, cancellation or rescheduling.
 
-- **Why:** the plan treats unsupported or malformed actions as runtime errors, not shape errors, so drafts containing them stay saveable and repairable. The generated TypeScript type is still a useful union: `TtsSayAction | EndConversationAction | Action`.
-- **Tradeoff:** `pipecat-ai-flows` also has a built-in `function` action, but it needs a Python callable, which a JSON document can't hold, so it's reported as unsupported.
+### The catalog UI
 
-### Shape vs. graph validation
+The Catalog screen has tables of locations, providers and appointment types with cross-links, the catalog lint, and a **tool playground**. The playground runs the real tools against a sandboxed session and calendar and shows exactly what the model would see, refusals included. The editor's inspector can attach tools to nodes and guards to edges.
 
-`parse()` checks shape, and `validate()` checks the graph and runtime. Both return the same issue shape: `{level, path, node, edge, message}`.
+## Evaluation
 
-- `path` uses array indices (`["nodes", 2, "edges", 0, "target"]`), so issues stay unambiguous even with duplicate names.
-- Pydantic error locations include union tags (such as `"other"`). These are removed by matching each location against the actual document, and duplicate messages from union alternatives are merged ("Expected a string or an array").
-- **Tradeoff:** the location mapping is heuristic code that depends on how Pydantic reports errors. Tests pin the expected paths.
-- Additions not in the plan:
-  - empty node names are an error
-  - function names are limited to 64 characters (OpenAI's limit)
-  - a `tts_say` with empty text gets a warning
-- Unreachable-node warnings are skipped when the initial node is missing, because that error already explains the problem.
+`make eval` runs each of 20 scenarios against a `gpt-4o-mini` simulated caller, in two modes:
 
-### Saving a draft and running it are different
+- **naive:** the catalog JSON (about 10k tokens) in the system prompt, with the search tools removed.
+- **tools:** the checked-in scheduler.
 
-`PUT /api/agents/{id}` saves any well-formed document and returns its issues. `AgentBuilder` refuses to run anything with an error.
+Both modes use the same graph, guards, booking validator, model (`gpt-4o`), caller and calendar. The harness drives the compiled agent graph as text, so it measures what a call runs.
 
-- **Why:** you can save half-finished work, but you can't run it.
-- **Tradeoff:** the saved-agents folder can hold agents that won't run. The list endpoint doesn't show validity yet; the UI calls `/validate` after loading an agent.
+A run is scored on the **final session state, not the transcript**. It passes if the intended reservation exists, or the draft is blocked for the intended reason, and the booking doesn't violate policy for the caller's *true* facts. Scoring the transcript would have missed two runs where the model told the caller "you're confirmed" without booking.
 
-### File storage
-
-There's one JSON file per agent in `backend/agents/`, seeded with `example.json` (moved from `backend/example_flow.json`).
-
-- IDs must match `^[a-z0-9_-]{1,64}$`, which rules out dots and slashes, so a path can't escape the folder.
-- Writes are atomic: write a temporary file in the same folder, `fsync`, then `os.replace`. A failed write leaves the previous file and no temp file behind. A malformed document is rejected with 422 before anything is written.
-- Saved files use a fixed format (2-space indent, field order: identity, then the graph). The checked-in example was rewritten in that format, so saving it unchanged produces no git diff.
-- **Tradeoff:** no locking or conflict detection, so the last write wins. That's fine for a local, single-user tool, but it would matter if the Phase 2 Copilot and the UI wrote to the same agent at once.
-- The example is also the default agent for calls that select none. Because it's an ordinary saved agent, it can be edited or deleted through the API. After a delete, calls with no selection fail with a clear error instead of running something else.
-
-### Call agent selection
-
-The order is: `body.agent` (inline draft), then `body.agent_id` (saved), then the example. An unknown or invalid ID, or a saved file that can't be read, is an error. The `/start` rejection now includes the issues as well as the message.
-
-### One schema file for frontend types
-
-`backend/contract.py` builds one JSON Schema that covers the agent document and the API response shapes (`Issue`, `AgentSummary`, `IssuesResponse`). `make types` writes it and generates `frontend/src/generated/contract.ts` with json-schema-to-typescript.
-
-- Field titles are removed so the generator doesn't create an alias type for every field.
-- Response models mark every field as required, so the TypeScript types don't make always-present fields optional.
-- Agent models produce an index signature (`[k: string]: unknown`) because they keep unknown fields. Known fields are still typed.
-- Drift is caught twice: a pytest test compares the committed schema (no Node needed), and `make check-types` regenerates both files in a temp folder and diffs them.
-- **Tradeoff:** both the schema and the generated TypeScript are committed, so they need regenerating after every model change. The tests enforce it.
-
-### Dependency locks
-
-Pipecat is pinned to `==1.4.0`, because the runtime adapter depends on its internals. Pydantic, FastAPI, loguru and python-dotenv are now declared directly, since the code imports them.
-
-- `backend/requirements-dev.lock` is a universal uv lock, built using the venv's existing packages as preferred versions. For Python 3.12+ it matches the tested environment exactly, and installing it changed nothing.
-- **Tradeoff:** the lock also covers Python 3.11, which the README still lists, but there numpy, scipy and pyee resolve to older, untested versions. Requiring 3.12+ would remove that gap.
-- `make install` uses the lock with plain pip. Only `make lock` needs uv.
-- The frontend already had `package-lock.json`, and json-schema-to-typescript is pinned exactly, like the other packages.
-
-### Out of scope for M2
-
-The frontend is unchanged apart from the generated types. The M1 page still loads `/api/agents/example` through the new generic route. A UI for saved agents, save, the validation badge and the repair view all come with the M3 editor.
-
-## Milestone 3: graph editor
-
-### Pure document actions, one store
-
-Every edit is a pure function from one `AgentConfig` to the next (`editor/document.ts`). Each one copies only what it changes and returns the same object when nothing changes. A Zustand store holds the document, and zundo keeps undo history for the document only (`partialize` to `doc`, compared by reference).
-
-- **Why:** an undo step is exactly one action (a field commit, a rename with its reference updates, a whole drag, a delete). Selection, validation, view and call telemetry live in the same store but never create history or mark the document dirty.
-- Form edits replace only the fields they show. Message roles, extra fields, other actions and their order, and schema keywords such as `minimum` all survive. Tests pin each of these.
-- **Tradeoff:** actions address nodes and edges by index, which is simple and makes undoing a rename keep the selection. The cost is that a stale index would write to the wrong node, so the inspector is keyed by selection and every commit runs against the current document.
-
-### Selection by index, canvas ids by name
-
-The selection is `{node}` or `{node, edge}` by array index, the same addressing as issue paths, so clicking an issue selects its target directly. React Flow ids are names (`node`, `node::function`), so they stay stable across unrelated edits.
-
-- Documents whose node or function names collide can't have unique canvas ids. They open in the JSON view, which doubles as the repair view, until the names are unique. You can still save them, which matches the M2 rule that structurally valid drafts are saveable.
-- Dangling edges and self-loops are left off the canvas. The issue list and the node's transition list still reach them.
-
-### The canvas is a controlled view
-
-`toFlow(doc)` derives nodes and edges. Canvas events become document actions or transient state; nothing serializes the React Flow graph back.
-
-- In-progress drag positions and measured node sizes are local canvas state. The drop commits all dragged positions in one `moveNodes`, so a drag is one undo step, and validation ignores it (it keys on the document without `ui`).
-- **Tradeoff:** React Flow v12 needs `measured` sizes on controlled nodes, so the canvas keeps a size map. All flow nodes are rebuilt on each document change. That's fine at tens of nodes, and node cards read their own data through narrow store selectors.
-
-### Layout
-
-dagre lays out a document on open, or after a JSON apply, only for nodes without a `ui` position. If some nodes have positions, the new ones are placed below them. The laid-out document becomes the dirty baseline, so opening an agent never shows unsaved changes. New nodes go to the centre of the view. Tidy layout and the minimap are M4.
-
-### Field buffers
-
-Inspector fields edit a local buffer and commit it on blur or Enter (Escape reverts). A rejected commit, such as a conflicting rename or malformed JSON, keeps the text and shows the reason. Pending buffers register in `editor/buffers.ts`, and Save and Test call commit them all first and stop on any rejection.
-
-- **Why:** a keystroke is never an undo step, and nothing silently runs or saves an older document than the one on screen.
-- Uncommitted text counts as unsaved changes. Without that, an unapplied JSON edit on a clean document left Save disabled; the browser smoke test caught it.
-- **Tradeoff:** a rejected buffer is discarded if you select something else. The error was shown, and keeping per-item drafts across selection changes wasn't worth the complexity.
-
-### Raw JSON stays honest
-
-Raw editors (pre/post actions, an unsupported property schema, the whole document) check shape before committing. Actions only need to be objects with a string `type`; whether they can run is the validator's job. The whole-document view asks the backend, because only Pydantic knows the full shape.
-
-- That needed one backend change: `/validate` and `PUT` responses now carry `malformed`, so the client can tell shape errors (can't apply or save) from graph errors (fine to save, not to run). Types were regenerated.
-- The property table covers `string`/`number`/`integer`/`boolean`, a comma-separated enum, a description and required. Unions, arrays, objects, combinators and enum values that wouldn't round-trip through a comma list use the raw editor instead.
-
-### Test-call lock
-
-`startTestCall` commits buffers, locks the store, validates a deep-cloned snapshot and starts the call only if there are no errors. Any refusal releases the lock. Once the call starts, `useCallLock` releases it when the call status returns to idle, which covers hang-up, failure and server disconnect.
-
-- The store refuses `edit`, `replace`, undo and redo while locked, and the UI disables those controls. Selection, inspection and canvas navigation stay available.
-- Because the document is locked from snapshot to teardown, the canvas and the running call can't drift apart. The canvas highlights the active node and the traversed edges (`from::via`) from `node_entered`. The path stays visible after the call and resets when the next one starts.
-
-### Testing
-
-vitest covers the document actions and what they preserve, undo grouping, transient changes creating no history, the lock, dirty tracking, `toFlow` id stability, layout, stale or position-only validation, and the call-start lock path. These run in Node with no DOM. The components weren't unit-tested. They were checked in headless Chrome against the real backend:
-
-- a new 5-node agent built, connected and test-called before saving, with a live transcript and the start node highlighted
-- rename, drag and delete each undone in one step
-- repair and malformed-JSON refusal
-- unknown fields preserved through form edits and saving
-- conflicting-rename rejection blocking Save
-- a refused call releasing the lock
-
-### Out of scope for M3
-
-Keyboard shortcuts (Save, Undo/Redo), import/export, tidy layout, the minimap, `make dev` and the README walkthrough are M4.
-
-## Milestone 4: delivery
-
-### Import and export are files, not API calls
-
-Export downloads the open document as `<id>.json`. Import reads a file in the browser and opens it as a new, unsaved agent named after the file (deduplicated against saved ids), so nothing reaches `backend/agents/` until you save.
-
-- **Why:** an import never overwrites a saved agent by accident, and it goes through the same open path as everything else (dirty tracking, history reset, the repair view).
-- Content is taken as is. The only change is that nodes without a `ui` position get one, as on any open. A test pins that export → import gives back the same document, unknown fields included.
-- A file that isn't a well-formed agent, or isn't valid JSON, opens in the JSON repair view with its original text instead of being refused. A trailing comma is easier to fix there than in another editor.
-- Export of a malformed (raw) document exports its text unchanged. Like Save, Export commits pending field buffers first and stops if one is rejected.
-- **Tradeoff:** import is "new agent from file". There's no "replace this agent with a file". The JSON view's paste and apply covers that.
-
-### Shortcuts leave text undo alone
-
-Mod+S saves (it commits the field being typed in first), and Mod+Z / Shift+Mod+Z (or Ctrl+Y) undo and redo the document. Mod is Cmd on macOS and Ctrl elsewhere. Inside a text field, undo and redo are left to the browser.
-
-- **Why:** while you're typing, the field's text is an uncommitted buffer. Cmd+Z there should undo your typing, not the document change behind it. Save is the exception: it's safe everywhere, and the browser's own "Save page" is never wanted here.
-- The key mapping is a pure function (`editor/shortcuts.ts`) with tests. The listener is one `keydown` handler in `App`. Undo and redo still go through the store, so the call lock applies to them too.
-
-### Tidy layout and the minimap
-
-"Tidy layout" sets every node to its dagre position in one `moveNodes` action, so it's one undo step. It keeps other `ui` fields, does nothing on an already tidy graph (no empty history entry), and fits the view afterwards. React Flow's `MiniMap` colours the start node, end nodes and the active node during a call.
-
-- **Tradeoff:** tidy throws away hand-placed positions. It's an explicit button and undoable, and layout still never runs on its own except for unplaced nodes.
-
-### Empty and error states
-
-- **Backend down:** the first load shows "Can't reach the backend" and retries every 3 seconds. `make dev` starts Vite well before Python has finished importing Pipecat, so a browser opened straight away recovers by itself. The Vite proxy answers 502 when nothing is listening on :7860, and that's reported as "unreachable" rather than as a bare status code.
-- **No agent open, or none saved:** an empty state with "New agent" and "Import". An agent with no nodes gets a hint on the canvas.
-- **Notices:** info notices clear after 6 seconds. Errors stay until dismissed or replaced, so a failed save isn't missed.
-- **Missing API keys:** the `/start` preflight now also checks `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` and returns a 422 that names the missing keys and the file to fix. Before, the call connected and then dropped with no explanation (`bot()` failed on `os.environ[...]` after WebRTC setup). Editing, saving and validation don't need the keys.
-
-### `make dev` and a fresh clone
-
-`make dev` runs `make -j2 run web`, so one Ctrl+C stops both servers (make passes the interrupt to both jobs). `make install` also creates `backend/.env` from `.env.example` if it doesn't exist and says so. It never overwrites an existing one.
-
-- **Tradeoff:** the two servers' logs are interleaved in one terminal. `make run` and `make web` still exist for separate terminals.
-- Checked from a copy of the tracked files in an empty directory: `make install`, then `make dev` brought up both servers, the proxy reached the backend, and SIGINT to the process group stopped both. With the empty keys that `make install` writes, a test call showed the missing-keys message.
-
-### Testing
-
-vitest adds the shortcut mapping (both platforms, inside and outside fields), tidy as one step that keeps extra `ui` fields, and import/export: the round trip, id deduplication, positions added only where missing, malformed files and invalid JSON going to the repair view, refusal during a call, and pending buffers committed or blocking. pytest adds the missing-key preflight.
-
-Also checked in headless Chromium against the real backend: import, then tidy, then Cmd+Z and Shift+Cmd+Z as single steps. Cmd+Z inside a field left the document alone, and Cmd+S from inside a field saved the typed value. The exported file kept unknown fields. A malformed import opened the repair view, and deleting the open agent showed the empty state. The backend-down page recovered on its own when the backend started.
-
-### Not done
-
-- I didn't place a real voice call in M4, because none of the call code changed. The M3 browser checks covered the call itself.
-- Stretch goals (node templates, a custom edge for parallel edges and self-loops, call history, a catalog demo agent) are not done.
-
-## Phase 2: context-management design
-
-Status: M5 (the catalog domain), M6 (tools and builder integration), M7 (the catalog API), M8 (the frontend) and M9 (the evaluation) are implemented and described [below](#milestone-5-catalog-domain-and-policy-engine). The design notes in this section were written before the benchmark; [M9](#results) has the measured results, which confirm the cost argument and show no measurable correctness difference at k=3.
-
-### Deterministic catalog rules, conversational interpretation
-
-The tools-based scheduler will receive small catalog projections through tools. Code will enforce provider/service/location relationships, referral requirements and new-patient eligibility before reserving a time. The naive evaluation baseline will receive the full catalog.
-
-- **Why:** the catalog contains duplicate names, confusable services and misleading specialty labels. Provider eligibility comes from explicit appointment-type IDs and location capabilities; comparing specialty strings would reject valid combinations. The model should resolve what the caller means while code checks what can actually be booked.
-- **Tradeoff:** a policy-valid booking can still be the wrong appointment for the caller. Guardrails do not establish correct interpretation, so evaluation must check intent separately from policy violations.
-- **Data check:** the catalog has 760 valid static service/provider/location triples. Each Radiology imaging type has two provider/location pairs, but Echocardiogram has four. These pairs are not calendar availability, and the plan now distinguishes them.
-
-### One typed session and explicit corrections
-
-`PatientFacts` will represent new-patient and referral status as true, false or unknown. A `SchedulingSession` will hold those facts, the booking draft, its revision, offered slots and any completed reservation. A dedicated update operation will collect choices and handle corrections; searches will not implicitly select their first result.
-
-- **Why:** an empty state currently contains no patient facts. Treating a missing boolean as false could classify an unknown caller as an existing patient. Corrections also need consequences: changing a service may invalidate a provider, and changing a provider or location invalidates previously offered times and confirmation.
-- **Tradeoff:** explicit invalidation adds state transitions and tests. It preserves compatible choices so a small correction does not restart the entire conversation, while keeping completed reservations separate from a mutable draft. Cancellation and rescheduling remain outside this phase.
-- The voice adapter will serialize the session into `flow_manager.state`; it lasts for the call, not across restarts. A session-state event will update the browser after non-transition tools, because the existing `node_entered` event only reports state when a node activates.
-- Patient facts are simulated caller-provided values. This design does not verify referral records or connect to a patient database.
-
-### Guard progress and reserve only after confirmation
-
-The current generic edge handler copies arguments into state and transitions unconditionally. The scheduler will use named guards for booking readiness, slot selection and completion, supplied to the builder through a small registry. A failed guard will return recovery information without leaving the node or modifying state.
-
-- **Why:** exposing a booking tool does not guarantee the model calls it. A separate, nonterminal confirmation node and a guarded success terminal prevent a transition from being mistaken for a successful reservation. Booking requires the current draft revision and explicit caller confirmation; a receipt is the evidence of completion.
-- **Tradeoff:** this extends the document contract with optional edge guards and requires registry-aware validation. Existing agents without guards keep their behavior. The generic compiler remains unaware of catalog rules; scheduler policy lives in the injected handlers.
-
-### Small results must still expose every valid candidate
-
-Search will use lexical ranking and curated aliases, deterministic tie-breaking, and a minimum match score. Ambiguity will be calculated before truncating results. Responses will include match counts, truncation metadata and refinement or continuation information.
-
-- **Why:** seven providers match "Dr. Chen", so a five-item response without continuation can make the intended person unreachable. A fuzzy matcher also always has a best result unless a threshold allows it to say there is no match. Explicit filters should narrow the full candidate set before the response cap applies.
-- **Tradeoff:** metadata and follow-up searches cost some tokens and turns. They preserve recall while keeping individual responses small. Provider and service specialty filters stay distinct, and a named but infeasible provider is explained rather than silently replaced.
-
-### A small domain core shared by three adapters
-
-Matching and policy will be pure Python domain code. One registry will describe tool names, argument/result models and handlers accepting a scheduling session. Voice, HTTP and evaluation adapters will call those same handlers; schemas and playground fields will be derived from the same definitions.
-
-- **Why:** otherwise each entry point can acquire different validation, defaults or mutation behavior. The builder should compile tools without importing scheduling-specific policy, and contract generation should not initialize calendars or voice services.
-- **Tradeoff:** registry injection and adapters add a small amount of plumbing. Keep the boundary limited to tool execution and transition guards; a general plugin framework is unnecessary for this phase.
-- Cache the immutable catalog, normalized names, aliases, ID maps and 760 static triples. Direct filtering is sufficient at this size; complex indexes or embeddings need evidence of a matching or latency problem. Session facts and mutable reservations must never share this cache.
-
-### Calendar intervals and isolated playgrounds
-
-The mock calendar will use a stable seed, injected clock and clinic timezone. Reservations will occupy provider time intervals across services and locations. Availability revalidation and reservation will be atomic within the server process, with retries keyed to the session and confirmed draft revision.
-
-- **Why:** deleting one slot ID does not block an overlapping slot for a different service duration or at another clinic. Two calls may also select the same offered time, so availability is only a proposal until reservation succeeds. Idempotency lets a repeated booking call return the original receipt.
-- **Tradeoff:** interval checks and a small critical section are more work than removing an ID from a list. Storage remains in memory and single-process; restart persistence, distributed locking and real provider calendars are outside scope.
-- The playground will have explicit server-side sandbox sessions with private calendars, Reset and inactivity expiry. Voice calls will share their own calendar; each evaluation run will start with a fresh equivalent calendar. This lets the playground exercise real mutations without consuming voice availability, and prevents one benchmark run from changing the next run's outcome.
-
-### Refactor the UI at its actual reuse points
-
-The catalog screen will reuse issue-list presentation through an issue-click callback. Editor navigation will remain in an editor wrapper, because the current `IssueList` maps every issue to an agent selection. The application shell will continue to own calls and audio above the screen switch.
-
-- **Why:** catalog paths need catalog navigation, and switching screens must not tear down a call or lose invalid local field buffers. Editor keyboard shortcuts must not change a hidden document while the user works in the playground.
-- **Tradeoff:** retaining the editor subtree or blocking navigation on an uncommittable buffer requires deliberate lifecycle handling. Prefer local screen state until a shared store is useful; there is no need to move catalog browsing into document history.
-
-### Measure whole conversations and compare equivalent systems
-
-Scenario fixtures and deterministic outcome checks will be established with the domain implementation, before the catalog UI. Both evaluation modes will use the same scheduler settings, caller facts, patient-state mutations, booking validator, simulated date and initial availability. Catalog access will be the comparison variable.
-
-- **Why:** identical guardrails can make actual policy violations zero in both modes, while matching quality remains very different. Report invalid attempts, guardrail rejections, completed reservations and correctness against caller intent separately. A spoken confirmation without a corresponding valid reservation is not success.
-- **Tradeoff:** a live caller simulator introduces variation even with fixed scenarios. Run three repetitions, retain traces and version/configuration metadata, and use deterministic checks on the resulting state instead of asking the simulator to judge its own conversation. Report simulator usage separately so it does not obscure scheduler cost.
-- Measure total input/output/cached tokens where supplied, tool calls, prompt growth, turns and latency. Clearly label playground token counts as estimates and record the pricing assumptions behind evaluation cost estimates.
-- The installed FlowManager defaults to appending context. Replacing the tools exposed at each node does not remove earlier tool results or instructions. Repeated searches and late corrections must therefore be included in the benchmark. If accumulated context materially increases cost or latency, compare a deterministic state summary at node boundaries while preserving unresolved preferences and recent caller context. Adopt resets only after checking outcome correctness; adding an LLM summarization call has its own latency and information-loss costs.
-
-## Milestone 5: catalog domain and policy engine
-
-`backend/catalog/` is plain Python and Pydantic. A test checks that importing it loads no Pipecat or FastAPI module. Nothing is wired into calls or the API yet; that's M6 and M7.
-
-### An immutable, checked catalog
-
-The catalog models are frozen and use tuples, and `default_catalog()` loads the file once per process. Loading rejects duplicate IDs, unknown cross-references, unknown capabilities and coerced values such as `"yes"` for a boolean.
-
-- **Why:** the catalog, its ID maps and the 760 static triples are shared by every call. A call can't change them by accident.
-- **Tradeoff:** `Capability` is a closed list, so adding a capability to the data is also a code change. A typo fails loudly instead of quietly making a service unbookable.
-- The agent `Issue` model lives in `agent_builder`, which imports Pipecat. Lint therefore has its own `CatalogIssue` with the same `{level, path, message}` plus a `code` and the `refs` it's about. M8's issue renderer can take either.
-
-### The order of questions
-
-`narrow()` asks for the service first, then any patient fact a remaining option depends on (referral before new-patient status), then the provider, then the location. Options are grouped by the field being asked. For "knee MRI" with an existing patient, the provider question lists exactly the two valid combinations: Ramirez at Downtown and Nguyen at Midtown.
-
-- An unknown fact is a *condition* on an option, never a pass or a fail. New-patient status is asked only when it matters: an accepting provider with a type open to new patients is `ready` without it.
-- A one-option draft still asks. The engine never chooses for the caller.
-- **Addition:** a `NO_FEASIBLE_OPTION` code. Some drafts pass every pairwise rule but have no completion, such as a cardiology consultation at North Gate, where no cardiologist works. When patient facts rule out every remaining option, one aggregated violation is reported for the draft. "New patient, OB/GYN" is `PROVIDER_NOT_ACCEPTING` before a provider is named.
-
-### Corrections: newest explicit choice wins, downstream only
-
-The plan says to keep explicit infeasible requests and to clear stale downstream choices. It doesn't say what "downstream" means, so I made it an order: facts, then service, then provider, then location, then slot. An update clears an earlier choice only if it comes after the earliest thing that changed, in that order, and now conflicts. Choices made in the same update are never cleared.
-
-- Changing the service to one the provider doesn't offer clears the provider. Moving an MRI to a location without imaging keeps the MRI and reports `LOCATION_LACKS_CAPABILITY` with the locations that work. Dropping the caller's actual need to make a location fit would be worse.
-- A fact change never clears the service. If the caller says they have no referral after all, the MRI stays and the draft is blocked with `REFERRAL_REQUIRED`. Asking "what do you need?" again would be wrong. A provider who isn't accepting new patients is cleared, and the location is kept.
-- Every cleared field is returned with the violation that cleared it, so the agent can tell the caller why.
-- **Tradeoff:** "newest wins" sometimes removes something the caller still wanted. It's predictable and always reported, and the alternative (refusing the correction) makes the caller repeat themselves.
-
-### Offers, confirmation and booking
-
-Offers belong to a draft revision. Selecting an offered slot increments the revision and carries the offer forward, and offers from several `offer_times` calls in one revision accumulate, so "the earlier one" still works. A slot can't be selected in the same update that changes the choices.
-
-- Confirmation is session state: `confirm(revision)` records it, any change clears it, and `book(calendar, revision)` requires it. M6's `book_appointment(draft_revision, confirmed)` will call both.
-- Idempotency works at two levels. The session returns its own receipt for a retry of the same revision. The calendar keys receipts by `session:revision`, so a retry from state saved before the receipt was written gets the first receipt instead of a second booking. A test covers each case.
-- A session that already has a booking refuses another one (`ALREADY_BOOKED`), since rescheduling is out of scope.
-
-### The mock calendar
-
-A provider's base schedule at a location on a day is a SHA-256 digest of (provider, location, date). It decides whether they work there that day (about 1 in N days for N locations), and which half-hour blocks are already taken (about a third). Slots are laid out back to back from 08:00 at the service's duration, on local weekdays, for 14 local days.
-
-- **Tradeoff:** the base schedules of a multi-location provider can overlap across clinics, which a real calendar wouldn't allow. Reservations can't overlap, though: they occupy the provider's time everywhere. The overlap scenario books a 45-minute echo at Mission District, and a 20-minute EKG at Mission Bay that overlaps it is then refused.
-- Reservation revalidates the time window, the base schedule and overlaps under one lock. A test with eight threads booking one slot gets exactly one receipt.
-- A subprocess test with a different `PYTHONHASHSEED` gets the same slots, and the first day's times are pinned.
-
-### Matching
-
-Search returns only the best tier (exact, alias, every query word, fuzzy every word, at least half the words). Exact and alias matches also keep entries that contain every query word, so "blood test" finds Blood Draw by alias and still lists Fasting Blood Test. A query with nothing at the `partial` level or better matches nothing.
-
-- `ambiguous` means more than one match in the best tier, computed before paging, and `clarify` names the first attribute that tells them apart (specialty, then location, title, language). "Dr. Chen" returns 5 of 7 with `next_cursor`, and the second page has the other two.
-- Filters run before the cap. A named provider ruled out by a filter is listed in `excluded` with the reason ("doesn't offer MRI - Knee") rather than replaced by a different person.
-- **Tradeoff:** lexical matching can't recover sounds-alike names that are spelled very differently, such as "Win" for Nguyen. The aliases and first-name variants cover the common cases without a new dependency.
-
-### Lint
-
-Errors are things a caller can ask for and never book: 8 unbookable types (ophthalmology, PT, urology) and 6 new-patient dead ends (OB/GYN and the Endocrinology consultation). Warnings are things that invite mistakes: 3 duplicate names, 13 NP/PAs titled "Dr.", 2 confusable location pairs and 5 unused capabilities. Those include the physical therapy rooms at two locations with no PT provider, and lab capability at three locations where the only lab provider doesn't work. Every issue path is checked against the raw JSON.
-
-### Scenarios
-
-`data/scenarios.json` has 17 scenarios. Each has the caller's facts and opening line, the intended outcome (a reservation pattern, or a block for a given reason), and a step-by-step script of searches, updates, offers and bookings with expected results. `tests/test_scenarios.py` replays the scripts with a fixed clock and a fresh calendar, then checks the outcome against session state using the same `check_outcome` M9 will use. They cover the plan's policy table, ambiguity and paging, late corrections, atomic invalid updates, stale confirmation and overlapping reservations.
-
-- **Tradeoff:** the scripts pin exact option lists and slot positions, so a change to ranking or the calendar generator means updating expectations. That's deliberate: such changes should be visible.
-
-### Not done in M5
-
-The tool registry, builder guards, `scheduler.json` (M6), the catalog API and contract types (M7), the UI (M8) and the live benchmark (M9). `make types` is unchanged because no API shape changed yet.
-
-## Milestone 6: tools and builder integration
-
-`catalog/tools.py` holds the eight tools and four guards. `agent_builder/registry.py` is the interface the builder sees, `catalog_voice.py` binds one to the other for calls, and `agents/scheduler.json` uses them. `example.json` is still the default agent.
-
-### One registry, structured errors
-
-Each tool is a name, a description, a Pydantic argument model, a result model and a handler taking a `ToolContext` (session, calendar, index). `Tool.run(ctx, raw_args)` returns JSON in every case: bad arguments, unknown IDs, rejected updates and booking failures come back as `{"error": {code, message, errors, violations, next_question, hint}}`, and the session is unchanged.
-
-- **Why:** the model can recover from an error it can read, while an exception would end the tool call. Voice, HTTP (M7) and evaluation (M9) call the same `run`, so validation and mutation rules can't drift between them.
-- The LLM schema comes from the argument model: `$ref`s inlined, titles and defaults dropped, `anyOf [X, null]` folded to `type: [X, "null"]`. Unknown arguments are rejected (`extra="forbid"`), but values aren't strict, because LLM JSON sometimes sends `"3"` for 3.
-- `update_booking` keeps the session's rule that an omitted field stays and an explicit null clears it. The exception is `patient: null`, which changes nothing; null on a single fact still clears that fact. Wiping every fact because the model wrote `null` for "nothing to say about the patient" seemed the likelier mistake.
-
-### Compact results, measured
-
-Results are projections, not catalog entities: cards with IDs and the fields that tell candidates apart, a booking view with names next to IDs, and option labels the model can read out ("MRI - Knee with Dr. Linda Ramirez (DO, Radiology) at Downtown Health Center"). Fields at their default (no hint, nothing excluded, not truncated) are left out of the JSON.
-
-- Searches return at most 5 cards with `total_matches`, `ambiguous`/`clarify`, `truncated`/`next_cursor`, `excluded` with reasons, and a one-line `hint`. Narrowing options and times are capped at 3. Truncated options say which search lists them all, and availability lists `other_days` to refine by.
-- `tests/test_tools.py` checks the serialized size of every result it produces against a 400-token budget (about 4 characters a token). The two overview pages are 184 and 112 tokens. The largest result is the first "Dr. Chen" page at about 380 tokens, because five namesakes with all their locations is what the caller has to choose between. Most results are 50–200.
-- A search with no query is a listing, so it isn't reported as ambiguous.
-- `find_locations` with a service applies the caller's known facts and keeps unknown ones as per-location `conditions`. A named location that can't work gets the policy's reason ("MRI - Knee needs imaging, which Richmond Care Center doesn't have") instead of the index's generic one.
-- **Tradeoff:** the projections repeat names that are already in earlier results, which costs some tokens per call, so the model never has to resolve an ID from memory.
-
-### Guards: data in the document, code in the registry
-
-`Edge.guard` names a check and `Node.tools` lists tools; both are plain strings in the document. The builder takes a `Registry` (tool bindings, guard bindings, and the state keys tools own) and knows nothing about scheduling. A tool handler returns `(result, None)`, so the node stays active. A guarded edge runs its check before it writes state or transitions, and a failure returns `{"status": "error", guard, message, next_question, violations}` and leaves the node active.
-
-- `service_chosen` was added to the plan's three guards. It stops the model from skipping to provider selection before the service is recorded.
-- **"The success terminal" in generic terms:** the validator can't tell which end node is "success". So a guard declares the tools it `completes` (`booking_completed` completes `book_appointment`). Any agent exposing such a tool must have an end node entered through that guard, and every edge into a node it guards must carry it. Removing the guard from `confirm → success`, or adding an unguarded shortcut into `success`, is an error. `handoff` needs no guard.
-- Tools own `state["patient"]` and `state["booking"]`. The edge handler drops those keys from collected arguments, and an edge property with one of those names gets a validation warning.
-- Without a registry, any tool or guard is unknown. The API validates and runs calls with the catalog registry, so `/validate` reports an unknown tool in a document the same way a call would.
-- **Tradeoff:** a guarded transition the model attempts too early costs a round trip. That's cheaper than a confirmation node the model can leave without booking.
-
-### The session in the flow state
-
-`catalog_voice.py` loads the `SchedulingSession` from `state["patient"]` and `state["booking"]` on each tool call, runs the shared handler and writes the session back only if it changed. A call's session ID is created the first time a tool changes something. Building the registry creates no calendar: the shared voice calendar is created on the first tool call, and a subprocess test checks that generating the contract doesn't create one.
-
-- A tool's handler runs synchronously between loading and saving the state, so parallel tool calls in one LLM turn can't interleave inside a mutation.
-- After a change, the builder calls `report_state(via)` on the flow manager. `TrackingFlowManager` sends `{type: "state_updated", node, via, state}`; a plain FlowManager has no such method and the call is skipped. The call panel's collected state follows both event types, and only `node_entered` adds a path step.
-
-### The scheduler agent
-
-The scheduler has seven nodes (M9 merged `find_service` and `choose_provider_location` into `choose_appointment`; see [below](#the-smoke-runs-changed-the-scheduler)). `find_service` searches and records the service. `choose_provider_location` follows `next_question` through facts, provider and location. `offer_times` offers times and records the pick. `confirm` reads the booking back and books it. `success` and `handoff` are end nodes. Every nonterminal node after the greeting exposes `update_booking` and `check_booking`, so corrections work anywhere, and has back edges (`change_service`, `change_choices`, `change_time`) and an edge to `handoff`.
-
-- **Why only the tools a step needs:** `book_appointment` exists only in `confirm`, and searches aren't offered once a time is being chosen. A correction that needs a new search goes back to `choose_provider_location`. This keeps each node's tool schemas small and the booking step explicit.
-- **Tradeoff:** Pipecat Flows appends context across nodes, so the earlier tool results stay in the prompt. That's measured in M9, not mitigated here.
-
-### Testing
-
-- `test_tools.py`: schemas, caps and size, paging through all seven Chens, conditions and reasons from `find_locations`, searches leaving the session alone, null semantics, corrections, atomic invalid updates, availability refusal and refinement, confirmation, stale revisions, idempotent retries, a cross-session conflict, and each guard's pass/fail and recovery information.
-- `test_registry.py`: registry-aware validation (unknown, duplicate and clashing tools, unknown guards, the completion rule, reserved state keys), compilation, the catalog registry matching the tool definitions, and the scheduler validating with no issues.
-- `test_runtime.py` drives the scheduler through the real FlowManager path: tools stay in the node and send `state_updated` without a path step, a failed guard leaves the node and state untouched, edges can't overwrite tool state, `success` is reached only after `book_appointment` returned a receipt, and a correction at `confirm` makes the confirmed revision stale.
-- An API test checks that `/validate` resolves the scheduler's tools.
-
-### Not done in M6
-
-I haven't placed a voice call with the scheduler. The flow is tested through the real FlowManager with scripted tool calls, but how well gpt-4o follows the prompts and `next_question` is untested until a live call or M9's benchmark. The builder has no tool or guard controls yet (M8), and the HTTP tool API and its contract types are M7.
-
-## Milestone 7: API and contract
-
-`catalog_api.py` serves the catalog, its lint and the tool metadata, and runs tools for the playground. `api.install()` registers it next to the agent routes. It imports only the catalog domain and FastAPI: a test checks that importing it loads no Pipecat or `agent_builder` module.
-
-### A tool's failure is a result, not an HTTP error
-
-`POST /api/catalog/tools/{name}` calls the same `Tool.run` as a voice call. Invalid arguments, a rejected update or a booking error come back as a 200 whose `result` is the `{"error": ...}` the model would get. HTTP errors are only for the request itself: an unknown tool or session (404), an expired session (410), or a body that isn't `{session_id, args}` (422).
-
-- **Why:** the playground's job is to show what the model sees. Turning a rejected update into a 422 would hide the structured error and its hints, which are part of the tool's behaviour.
-- The response carries the session's full `state` after every call, so the UI's patient controls and draft view need no extra request. Patient controls send `update_booking` with explicit nulls, under the same rules as the model's calls.
-- A test runs the same calls through the voice adapter and the HTTP route and gets identical results.
-
-### Sandbox sessions refuse rather than replace
-
-Each playground session has its own `SchedulingSession` and `Calendar`, held only in `PlaygroundSessions`. A request names a session ID and can reach nothing else: voice sessions live in their call's flow state, and the voice calendar is never created by the playground (a test checks it).
-
-- Sessions expire after 30 minutes without a request. Expired IDs are remembered (up to 1000), so a late request gets a 410 that says the session expired, rather than a 404 or, worse, a new empty session under the old ID. The UI can explain that and keep showing the last result.
-- Expiry is checked on each request; there's no background task. Past 100 sessions, the least recently used one expires early, so abandoned tabs can't grow memory without bound.
-- Disposing of an expired session is a 204, since it's gone either way. Reset is a delete, then a new session.
-- A tool call runs under the store's lock, so two requests can't interleave inside one session's mutation. **Tradeoff:** that serializes all playground calls. They take milliseconds and the playground has one user, so a lock per session wasn't worth it.
-- The routes are plain `def` handlers, so FastAPI runs them in its thread pool rather than on the event loop the voice pipeline shares.
-
-### Contract
-
-The schema now covers the catalog, lint issues, the tool and guard metadata, playground sessions, tool run requests and responses, and every tool's argument and result models. `ToolArgs` and `ToolResults` are generated models with one field per tool, so the frontend gets `ToolArgs["update_booking"]` and `ToolResults["update_booking"]`. Tool and guard names are string unions.
-
-- Tool results are sent without fields at their defaults (M6). Their schemas are generated in validation mode, which marks defaulted fields optional, so the TypeScript types say `fields?:` where a result may leave `fields` out. The models that are always dumped in full (the catalog, `SessionState`, lint issues, the responses) are marked with every field required.
-- The catalog, lint and tool listings are computed once and served as cached JSON, since none of them changes while the server runs.
-- **Tradeoff:** `ToolRunResponse.result` is typed as an object, not a union keyed by the tool name. JSON Schema can't express "the result type for the tool in the URL", so the frontend narrows it with `ToolResults[name] | ToolErrorResult`.
-
-### Testing
-
-`tests/test_catalog_api.py` covers the catalog, lint and tool listings matching the domain, an empty new session, results with state and the token estimate, the Echo / David Chen / Richmond violation, a full booking, tool errors leaving the state unchanged, request errors, reset, inactivity expiry and the 410, the session limit, two sandboxes booking the same time, the voice calendar staying untouched, identical voice and HTTP results, and the import boundary. `test_contract.py` checks the new definitions, and `make check-types` passes. I also ran the real server and exercised lint, a session, the Echo violation and disposal with curl.
-
-### Not done in M7
-
-The frontend doesn't call these routes yet (M8).
-
-## Milestone 8: frontend
-
-The top bar switches between the **Agents** screen (the builder) and a **Catalog** screen: the catalog as tables, its lint, and a tool playground. The node inspector gains a Tools section, the edge inspector a guard selector, and canvas nodes an "N tools" badge. No backend code changed.
-
-### Switching screens keeps the editor alive
-
-The switch is local state in `App`. Both screens stay mounted once visited, stacked in one container; the hidden one is `invisible` and `inert`. The call, its `<audio>` element and the call panel sit outside that container, so a call keeps playing and its controls stay on screen while you browse the catalog. The top bar keeps an "In call…" button on the catalog screen during a call.
-
-- **Why retain rather than block:** a field whose commit was rejected (a rename that collides, malformed JSON) keeps its text and error in component state. Unmounting would lose it; blocking navigation until it's fixed would trap you in the editor. Keeping the subtree means you come back to exactly what you left, and Save still refuses until the buffer commits.
-- `visibility: hidden` rather than `display: none` keeps the canvas's measured node sizes; React Flow would otherwise see zero-sized nodes.
-- **Shortcuts are scoped.** `useShortcuts` ignores keys unless the agents screen shows, so ⌘S/⌘Z in the playground don't save or undo a hidden document. React Flow listens for Delete on the whole document, so the canvas gets an `active` prop and drops its delete key while hidden. A browser check confirmed that Backspace, ⌘Z and ⌘S on the catalog screen leave the document alone and that ⌘Z works again on return.
-- The catalog screen mounts on first visit and then stays, so its playground session survives switching back and forth.
-- **Tradeoff:** a hidden editor still re-renders on store changes (a call's trace, validation results). That's the same work it does when visible, and cheaper than remounting a canvas.
-
-### Catalog data is fetched once and shared
-
-`catalog/data.ts` wraps each never-changing route (catalog, lint, tool registry) in a small resource: the first subscriber triggers the fetch, everyone shares the result through `useSyncExternalStore`, and a failure shows a Retry that refetches. The inspector's tool checkboxes and guard selector use the same registry as the playground.
-
-### Tables, cross-links and lint
-
-Locations, providers and appointment types are tables with a word filter over the visible fields and the ids each record references. A cross-link either focuses a record (a provider's location chip opens the Locations tab, clears its filter, highlights and scrolls to the row) or filters a table by an id ("12 providers" on a location filters providers by `loc_007`; "18 types" on a provider filters types by that provider's id). A type no provider offers shows "none" in red, and rows with lint issues get a dot whose tooltip lists them.
-
-- `IssueList` was split. `IssueRows` renders any `{level, message}` list with an optional label and an `onIssueClick(issue)` callback. `IssueList` is now the editor wrapper that maps an agent issue to a selection, and the lint panel maps a `CatalogIssue`'s `path` (`["providers", 26, "name"]`) to a record with `lintTarget`.
-- The lint tab also lists the catalog's six booking rules, since the lint is about how the data falls short of them.
-- **Tradeoff:** the filter is substring matching over ids too, so `prov_01` matches `prov_010`–`prov_019`. Links always use full ids, and the ids are fixed-width, so a link's filter never over-matches.
-
-### The playground shows what the model sees
-
-The form for each tool is generated from the argument schema the LLM gets (`catalog/toolForm.ts`): strings, dates, integers, booleans, enums and the nested `patient` object. An empty field is left out and a "null" option sends an explicit null, because `update_booking` treats those differently. The form checks only that a number is a number; a missing required argument or an unknown id goes to the tool, so the result is the same `{error}` the model would get, flagged as a refusal. Id fields suggest catalog records, and `slot_id` suggests the currently offered times.
-
-- Patient controls are Unknown/Yes/No buttons. Each click sends `update_booking` with `{patient: {fact: null | true | false}}`, so they follow the same mutation rules as the model, including clearing downstream choices that no longer fit (new patient + Echocardiogram clears the provider and location).
-- The draft panel shows the revision, the chosen service/provider/location by name and id, the selected time, how many times are offered for which revision, confirmation, and the receipt once booked. `book_appointment`'s `draft_revision` field offers the current revision.
-- The token count is labelled an estimate, with the 4-characters-a-token basis in its tooltip.
-- **Sessions:** the playground creates a sandbox when it first shows and disposes of it on unmount; a `pagehide` handler sends a `keepalive` delete when the tab closes. The effect is written so StrictMode's double run disposes of the extra session. Reset bumps a generation counter, which disposes of the old session and creates a new one. A 404 or 410 from a tool call marks the session gone: the backend's explanation and the last result stay on screen, Run is disabled, and Reset starts over.
-- **Tradeoff:** the form is generic, so it shows `cursor` as a text field rather than a "next page" button. Copying `next_cursor` from the result is one paste, and the form doesn't have to know each tool's paging.
-
-### Tools and guards in the inspector
-
-`setNodeTools(doc, i, tools)` and `setEdgeGuard(doc, i, j, guard)` are document actions like the rest, so each checkbox or selection is one undo step and is refused during a call. The Tools section lists the registry's tools with the first sentence of each description; a toggle appends or removes one name (`withTool`) and keeps the others' order. A tool or guard name the registry doesn't know stays visible (checked, or as a selectable option marked unknown), so it can be removed; the validator reports it as an error. The node's transitions list shows each edge's guard.
-
-### Testing
-
-- vitest: `setNodeTools`/`withTool`/`setEdgeGuard` (dedup, no-op identity, removing the field, keeping unknown names and other edge fields), tools and guards surviving export and re-import, form generation from the real schema shapes and argument building (omitted vs null, nested objects, number parsing, required arguments left to the tool), lint targets, issue grouping, cross-references and filtering, and the shared resource's load-once and retry.
-- A headless Chromium script against `make dev` checked: tool badges on the scheduler, toggling a tool and undoing it, the guard selector, a rejected rename surviving a trip to the catalog, the lint click focusing `prov_002`, the Richmond provider filter, the Echo / David Chen / Richmond `LOCATION_LACKS_CAPABILITY` violation through `update_booking` then `check_booking`, the patient controls, Reset getting a new session id, and shortcut scoping.
-
-### Not done in M8
-
-I didn't place a voice call during this milestone, so call controls and audio across a screen switch are checked by construction (they render outside the switched container), not by a live call. Shortcut scoping and the screen switch with invalid buffers are checked in the browser but not with vitest component tests, since the suite has no DOM environment. The benchmark and its write-up are M9.
-
-## Milestone 9: evaluation
-
-`backend/eval/` runs the scheduler against a simulated caller for every scenario, with the full catalog in the prompt (**naive**) and with the catalog tools (**tools**), and writes [`backend/eval/results.md`](backend/eval/results.md). `make eval` runs it. The pytest and vitest gaps in the plan's checklist are filled too (see [Testing](#testing-5)).
-
-### The harness runs the real graph as text
-
-`TextFlow` (`eval/flow.py`) drives the `NodeConfig`s and `FlowsFunctionSchema` handlers that `AgentBuilder` compiles for a call, with the catalog registry bound to a fresh calendar. Tools, guards, transitions and the flow state are therefore the call's own. Only the Pipecat pipeline is replaced, and its context handling is reproduced: the node's `role_message` is the system prompt, each node's task messages are appended (Flows' default APPEND strategy), and the node's functions are the tools. The model's tool calls go through the handlers, and a transition happens after that round's results are in the context. An end node ends the conversation once the model has spoken in it.
-
-- **Why:** a separate "eval agent" would measure something other than what a call runs. This way the evaluation is the third adapter over the same handlers, and a test checks that the voice adapter, an HTTP playground session and the evaluation's `TextFlow` give identical results, refusals included, and leave the same session.
-- **Tradeoff:** it's text, not voice. There's no speech recognition error, interruption or TTS time, so latency is model latency per call, not what a caller hears. Pipecat's own message ordering is approximated, not reused. Model calls use the provider's default sampling, as the voice pipeline does (the scheduler document sets only the model).
-- `eval/llm.py` is the seam: one `complete()` per model request, returning the provider's usage (input, output, cached) and the measured latency. The harness tests use a scripted stand-in, so they need no network.
-
-### Two modes, one variable
-
-`naive` is the scheduler document with the catalog file appended to the persona as compact JSON (about 10k tokens, estimated) and the four catalog search tools removed from every node. A note tells it to look things up in the catalog wherever its instructions mention a search tool. `tools` is the checked-in scheduler, unchanged. Both modes keep the same graph, guards, `update_booking`/`check_booking`/`get_availability`/`book_appointment`, model, caller, simulated date and calendar.
-
-- **Why:** the plan makes catalog access the only variable, so differences in correctness and cost come from it, not from different prompts or validators.
-- **Tradeoff:** the naive baseline isn't naive about booking. It has the same policy engine behind `update_booking`, whose results include up to three feasible options and the next question. It is "catalog in the prompt, guardrails in code", which flatters its correctness compared with a prompt-only agent. A prompt-only agent with no booking validator would also not be comparable on policy violations, because nothing would refuse its bookings.
-
-### Scoring: session state and the caller's true facts
-
-A run is correct if `check_outcome` passes on the session the tools left in the flow state: an intended reservation, or a draft blocked for an intended reason. The booking must also not violate policy for the caller's *true* facts. The validator only knows the facts the agent recorded, so an agent that records a new patient as existing can book a provider who isn't accepting new patients without any refusal. That booking matches a "provider omitted" pattern, but it isn't correct, and a test pins this.
-
-- A blocked outcome requires the caller's request to be in the draft. An agent that explains "North Gate has no dental" without recording North Gate fails, because handing off without trying and handing off after a real block look the same from the outside. The persona now says to record a request even if it may not work.
-- Every run records completed bookings, wrong bookings, bookings violating the true facts, wrong recorded facts, refused `book_appointment` calls, guard rejections, tool errors, calls to functions the current node doesn't have, updates that left the draft blocked, turns, model and tool calls, per-call prompt tokens, cached tokens, latency, and the provider-reported model ids. These are reported separately, not folded into one score.
-- Cost is an estimate from assumed list prices recorded in the report (`eval/report.py`), split into scheduler and simulated caller.
-
-### The simulated caller
-
-`gpt-4o-mini` plays the caller (`eval/caller.py`). Its prompt has the scenario's facts (new or existing patient, referral), its opening line and its details, never the intended outcome. Its first line is the scenario's opening verbatim, and it says `[END]` to hang up. It doesn't judge the conversation.
-
-- The first smoke run found the caller inventing needs ("let me check other locations") and hanging up before anything was booked. Its prompt now forbids wanting anything not described, lists corrections separately ("Actually…", "instead"), says them one at a time and only after the assistant has acted, and only says goodbye after a booking, a block or a handoff.
-- **Tradeoff:** a model caller still varies between runs and sometimes volunteers details early (one run's caller said "standard vaccinations like a flu shot" before it was asked). Three repetitions and the full traces make that visible; the scoring doesn't depend on its wording.
-
-### Scenarios
-
-Three scenarios bring the set to 20, each with a deterministic step script like the others:
-
-- `mission_blood_draw`: "the Mission clinic" matches Mission Bay and Mission District. Both have lab rooms, but the only lab provider works at Mission Bay, so Mission District is `NO_FEASIBLE_OPTION`.
-- `late_location_change`: after a time is picked, the caller moves to another of the provider's locations, and the time is cleared.
-- `repeated_searches`: two questions about services, a first choice blocked by a missing referral, then a booking. It adds context before the booking starts.
-
-A scenario can now list `prebooked` reservations that other callers hold when a live run starts. `overlapping_reservations` holds Dr. David Chen's 09:00 EKG at Mission Bay, which blocks the 08:45 echo at Mission District for the live caller. The step replay doesn't use it, and a test checks that prebooking removes exactly the overlapping times.
-
-### The smoke runs changed the scheduler
-
-Before the reported run, smoke runs (6 scenarios × 2 modes × 1 run each) found defects in `scheduler.json` itself, in both modes:
-
-- **The service/provider split was a trap.** After the service was recorded, `update_booking`'s `next_question` asked for the provider, so the model collected the provider and location inside `find_service`. That node had no `find_providers` and no `get_availability`. The model then concluded that a provider missing from the three listed options "isn't available", handed off, or said "let me check those times" for 15 turns without a tool to do it. It almost never took `service_chosen`. Prompt wording didn't fix it (5/12 correct after a prompt-only change). `find_service` and `choose_provider_location` are now one `choose_appointment` node with all four lookups, `update_booking` and `check_booking`. The narrowing loop runs in one place, and `choices_complete` (guarded by `booking_ready`) is the only way forward. The same smoke set then reached 11/12. The `service_chosen` guard stays in the registry for other agents.
-- **Persona rules:** record a requested service, provider or location even if it may not work, since the result explains why; hand off only when the caller asks for a person or turns down the fixes; never say you're checking something without calling the tool in the same turn; booking results list at most three options, so look up a named provider before saying anything about them.
-- **Tradeoff:** these changes were made with 6 of the 20 scenarios in view, so the reported numbers aren't from a held-out set. The defects were general (any caller who names a doctor outside the first three options hit the first one), and the scenarios weren't changed to fit the agent. A held-out scenario set is listed under remaining work.
-
-### Results
-
-The reported run is `20261022T002911Z`: 20 scenarios × 3 repetitions × 2 modes, `gpt-4o` scheduler and `gpt-4o-mini` caller. [`results.md`](backend/eval/results.md) has the full tables, `results.json` the per-run metrics, and `backend/eval/runs/20261022T002911Z/traces.jsonl` every conversation.
+### Results (20 scenarios × 3 repetitions × 2 modes)
 
 | | naive | tools |
 |---|---|---|
 | Intended outcome reached | 48/60 (80%) | 47/60 (78%) |
-| Wrong bookings / bookings violating the true facts | 9 / 0 | 6 / 0 |
+| Wrong bookings | 9 | 6 |
 | Scheduler input tokens per conversation (mean) | 171,763 (84% cached) | 41,862 (25% cached) |
-| Uncached input tokens per conversation (mean) | 26,630 | 31,240 |
 | Prompt size, first → last call (mean) | 8,703 → 11,105 | 382 → 2,813 |
 | Est. scheduler cost per conversation | $0.25 | $0.10 |
 | Latency per model call, p50 / p95 | 0.80s / 1.24s | 0.76s / 1.14s |
 
-What the numbers say, and what they don't:
+What the numbers show:
 
-- **Correctness is a tie at this sample size.** One run apart in 60, and both modes have the same policy engine behind them, so neither booked anything that violates policy for the caller's true facts. The plan expected this: guardrails make violations zero in both modes, so they say nothing about matching. Three repetitions per scenario are enough to see which scenarios are fragile, but not to rank two agents within a few points.
-- **The modes fail differently.** Naive's misses are catalog-reading errors. In `multi_location_provider` (0/3) it told the caller Sunset has no dermatology, although Dr. Kenji Kim practises there, and booked another location. In `knee_mri_unknown_facts` (1/3) it booked "MRI - Spine" for a knee. It booked a New Patient Consultation for an OB/GYN request, and recorded a wrong patient fact twice. Its updates left the draft blocked 27 times, against 8 for tools: the validator caught many wrong IDs before they became bookings. Tools' misses are about conversation policy, not matching:
-  - 5 runs explained a real block ("no providers offer eye exams") and handed off without recording the request, which the scoring counts as a miss (`ophthalmology_not_offered` 0/3, `dental_north_gate` 1/3).
-  - `repeated_searches` (0/3) booked a service from the earlier "travel shots" search instead of searching for the flu shot the caller asked for.
-  - In 2 runs (`upstream_conflict_kept`) it told the caller "everything is confirmed" without calling `book_appointment`. Scoring against the session caught that; scoring the transcript wouldn't have.
-- **`correction_service` (1/3 in both modes) is partly a caller artifact.** The simulated caller said "Midtown is fine" before its corrections and then picked the first option offered for the MRI. Any agent would have booked Downtown there.
-- **Cost:** tools sends 4.1× fewer input tokens and costs 2.6× less, not 4×. OpenAI caches the naive prompt's stable 9k-token catalog prefix at half price, so naive's *uncached* input (26.6k) is about the same as tools' (31.2k). Tools caches only 25%: tool definitions come before the messages, and each node exposes a different set, so every transition invalidates the cached prefix. With a provider that discounts cached tokens more heavily, the gap would narrow further. Latency per call is about the same, and so is total model time per conversation (13.9s vs 14.4s): tools makes more, smaller calls.
-- **Prompt size, not just cost:** naive's prompt never drops below 8.7k tokens and reached 15.4k. Tools' largest was 6.9k. The catalog is 10k tokens now; at ten times the size, naive stops fitting comfortably, while the tools results stay capped at about 400 tokens each.
+- **Correctness is a tie at k=3**, because both modes share the policy engine. Neither mode made a booking that violated policy, which is the point of the guardrails.
+- **The two modes fail differently.** Naive's misses are catalog-reading errors: an MRI - Spine booked for a knee, "Sunset has no dermatology" when a dermatologist practises there, a wrong patient fact recorded. Its updates hit a blocked draft 27 times, against 8 for tools, so the validator caught many bad IDs before they became bookings. Tools' misses are about conversation policy: handing off after a real block without recording the request, and reusing an earlier search result.
+- **Cost: 4.1× fewer input tokens, but only 2.6× cheaper.** OpenAI caches naive's stable catalog prefix, so the uncached input of the two modes is similar (26.6k vs 31.2k). Tools caches only 25%, because the tool list changes between nodes and that invalidates the prefix.
+- **Scale is where the gap opens.** Naive's prompt never drops below 8.7k tokens and grows with the catalog. Each tools result stays under 400 tokens whatever the catalog size.
 
-### Context growth: measured, not mitigated
+### What the benchmark changed
 
-Tools-mode prompts grow from 382 tokens to 2.8k on average by the last call (5.5k by call 30), because Flows appends every node's instructions and every tool result. That's still a third of naive's starting prompt, and the long tail is the correction scenarios (`correction_service` averages 158k input tokens per conversation in tools mode, against 47k for most others).
+The smoke runs found a structural defect. The original graph split "find service" from "choose provider and location", but `update_booking`'s next question pulled the model into collecting the provider in a node that had no provider search. Rewording the prompt didn't fix it (5/12 correct). Merging the two into one `choose_appointment` node did (11/12). The lesson: **a node's tools have to cover the questions the engine will ask in that node.**
 
-- **Decision:** no state summary at node boundaries yet. The plan made it conditional on growth materially hurting cost or latency. Per-call latency doesn't change with prompt size in this range, and the scheduler costs $0.10 a conversation. A summary would also have to keep unresolved preferences and recent caller turns (the `repeated_searches` failure is a stale earlier search being reused), so its correctness risk is real.
-- **The cheaper lever is caching.** A stable tool list across nodes, with guards rather than tool removal enforcing what can run where, would let the prefix cache work. It would cost the per-node tool scoping that keeps `book_appointment` out of sight before `confirm`. That trade-off is worth measuring before a summary.
+- *Caveat:* the fixes were made with 6 of the 20 scenarios in view, so the reported set isn't held out.
 
-### Testing
+## Scalability
 
-- `tests/test_eval.py`, with scripted LLMs and no network: a booking through the real graph with path, transitions, state updates, usage, models and the opening line checked; context appended across nodes and tools following the node; naive mode's catalog prompt, tool removal and validity; a search tool called in naive mode; unknown functions, guard rejections, tool errors and refused bookings counted; a booking that passes the validator but violates the caller's true facts scored as wrong; prebooked times held before the call; turn limit, round limit and API errors still producing a record; the caller prompt (facts in, outcome out, corrections listed apart, opening line without a model call); the report's aggregates, prices and rendering; the CLI refusing bad options before creating an API client.
-- `test_catalog_api.py`: the voice adapter, an HTTP playground session and the evaluation's `TextFlow` give identical results and leave the same session, across searches, refused updates, bad arguments, corrections, offers, an unconfirmed booking, a stale revision, a booking and its idempotent retry.
-- `test_index.py` / `test_tools.py`: unrelated queries match no provider either, at the index and tool level; ranking doesn't change with the catalog's order or `PYTHONHASHSEED`.
-- `test_scenarios.py`: the three new scenarios replay, and prebooking removes exactly the overlapping times.
-- `test_runtime.py`: updated for `choose_appointment`.
-- vitest: the shortcut listener does nothing while the editor is hidden and works again when it shows (`shortcutListener`, extracted from `App`), and editor issue clicks route to the agent, node or edge, tool issues to the node and guard issues to the edge.
-- `make test`, `make check-types` and `npm --prefix frontend run typecheck` pass.
+- **Prompt size doesn't depend on catalog size.** Results are capped and paged. A catalog ten times larger means more pages in the rare ambiguous case, not a larger prompt.
+- **Matching scales with filtering first.** Explicit filters (service, location, specialty) narrow candidates before ranking. At this size, in-memory filtering over cached immutable indexes is enough. A much larger catalog would put the same tool contract in front of a search index. The model-facing tool interface wouldn't change.
+- **Context growth within a call is the remaining cost.** Pipecat Flows appends every node's instructions and every tool result, so long correction-heavy calls reach about 158k input tokens in total. The cheaper fix is caching: keep a stable tool list across nodes and enforce what can run where with guards rather than by hiding tools. That trades away per-node tool scoping and should be measured before adding a summary step.
 
-### Not done / remaining work
+## Scoping
 
-- **A held-out scenario set.** The scheduler fixes came from smoke runs over 6 of these 20 scenarios.
-- **More repetitions.** k=3 can't separate 80% from 78%. A larger k, or more scenarios per failure type, would.
-- **Recording blocked requests.** The persona says to, but 5 tools runs still explained the block without recording it. A guard on `handoff_to_staff` that requires a recorded request would enforce it in code, at the cost of a round trip.
-- **False confirmations.** The `success` guard stops the graph from reaching `success` without a receipt, but nothing stops the model *saying* "you're booked" in `confirm`. A post-check on the confirm node's reply, or a TTS-side filter, would close that.
-- **Caching-friendly tool exposure,** as above, and a state summary only if longer conversations make growth matter.
-- I haven't placed a live voice call with the merged scheduler. The flow is tested through the real FlowManager and the text benchmark, but speech recognition errors and interruptions aren't part of the benchmark.
+**Built:** the graph editor and test calls; the catalog domain (policy engine, matching, lint, mock calendar); the tools and guards; the scheduler agent; the catalog UI and playground; the naive vs tools benchmark with traces.
+
+**Mocked:** availability, patient records and referral verification.
+
+**Left out on purpose:** a real EHR or calendar integration, persistence across restarts, multi-user locking, rescheduling and cancellation, embeddings, and LLM-based context summarization. None of these is needed to show the context-management argument.
+
+## Remaining work
+
+- A held-out scenario set, and more repetitions. k=3 can't separate 80% from 78%.
+- Enforce "record the request before handing off" with a guard on `handoff`, rather than a prompt rule.
+- Stop false "you're booked" claims with a post-check on the confirm node's reply.
+- Try caching-friendly tool exposure, and add a state summary only if longer calls make it necessary.
+- Place a live voice call with the merged scheduler. It's tested through the real FlowManager and the text benchmark, but speech recognition errors and interruptions aren't covered.
