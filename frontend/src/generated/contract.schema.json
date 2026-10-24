@@ -1,0 +1,2795 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": true,
+      "description": "Any other action. Preserved, but validation reports it: Pipecat only runs\nactions with a registered handler, and a JSON document can't carry one.",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "AgentConfig": {
+      "additionalProperties": true,
+      "description": "A complete agent: identity + the conversation graph.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "voice_id": {
+          "default": "21m00Tcm4TlvDq8ikWAM",
+          "type": "string"
+        },
+        "model": {
+          "default": "gpt-4o",
+          "type": "string"
+        },
+        "persona": {
+          "default": "",
+          "description": "Global role message, applied to every node.",
+          "type": "string"
+        },
+        "first_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Said when the call starts, without an LLM call; the initial node then waits for the caller."
+        },
+        "initial_node": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "initial_node",
+        "nodes"
+      ],
+      "title": "AgentConfig",
+      "type": "object"
+    },
+    "AgentSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "AgentSummary",
+      "type": "object"
+    },
+    "ApplyRequestArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "patient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatientArgs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Facts the caller stated; null for one fact clears it."
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "description": "A service id from search_services.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "description": "A provider id from find_providers.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "description": "A location id from find_locations.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A slot id from get_availability that the caller picked."
+        },
+        "service_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The service the caller chose, in their words; omit service_id when using this."
+        },
+        "provider_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider the caller chose; omit provider_id when using this."
+        },
+        "location_text": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The location the caller chose; omit location_id when using this."
+        }
+      },
+      "title": "ApplyRequestArgs",
+      "type": "object"
+    },
+    "AppointmentType": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "specialty": {
+          "type": "string"
+        },
+        "duration_min": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "requires_referral": {
+          "type": "boolean"
+        },
+        "new_patients_allowed": {
+          "type": "boolean"
+        },
+        "required_capability": {
+          "anyOf": [
+            {
+              "enum": [
+                "imaging",
+                "lab",
+                "physical_therapy",
+                "dental",
+                "surgery"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "specialty",
+        "duration_min",
+        "requires_referral",
+        "new_patients_allowed",
+        "required_capability"
+      ],
+      "title": "AppointmentType",
+      "type": "object"
+    },
+    "ArgError": {
+      "properties": {
+        "path": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "message"
+      ],
+      "title": "ArgError",
+      "type": "object"
+    },
+    "Availability": {
+      "properties": {
+        "revision": {
+          "type": "integer"
+        },
+        "today": {
+          "type": "string"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/SlotView"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "other_days": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "revision",
+        "today",
+        "slots",
+        "total"
+      ],
+      "title": "Availability",
+      "type": "object"
+    },
+    "AvailabilityArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "day": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only this local date (YYYY-MM-DD)."
+        },
+        "part_of_day": {
+          "anyOf": [
+            {
+              "enum": [
+                "morning",
+                "afternoon"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AvailabilityArgs",
+      "type": "object"
+    },
+    "BookAppointmentArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "draft_revision": {
+          "description": "The draft revision the caller confirmed.",
+          "type": "integer"
+        },
+        "confirmed": {
+          "description": "True only after the caller said yes to the read-back.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "draft_revision",
+        "confirmed"
+      ],
+      "title": "BookAppointmentArgs",
+      "type": "object"
+    },
+    "BookingDraft": {
+      "additionalProperties": false,
+      "description": "The caller's current choices. Nothing here is booked.",
+      "properties": {
+        "service_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "service_id",
+        "provider_id",
+        "location_id",
+        "slot_id"
+      ],
+      "title": "BookingDraft",
+      "type": "object"
+    },
+    "BookingView": {
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/DraftView"
+        },
+        "check": {
+          "$ref": "#/$defs/StatusView"
+        }
+      },
+      "required": [
+        "draft",
+        "check"
+      ],
+      "title": "BookingView",
+      "type": "object"
+    },
+    "Catalog": {
+      "additionalProperties": false,
+      "properties": {
+        "policies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "type": "array"
+        },
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/Provider"
+          },
+          "type": "array"
+        },
+        "appointment_types": {
+          "items": {
+            "$ref": "#/$defs/AppointmentType"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "policies",
+        "locations",
+        "providers",
+        "appointment_types"
+      ],
+      "title": "Catalog",
+      "type": "object"
+    },
+    "CatalogIssue": {
+      "properties": {
+        "level": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "type": "string"
+        },
+        "code": {
+          "enum": [
+            "UNBOOKABLE_TYPE",
+            "NEW_PATIENT_DEAD_END",
+            "DUPLICATE_PROVIDER_NAME",
+            "DR_TITLE_ON_NON_PHYSICIAN",
+            "CONFUSABLE_LOCATIONS",
+            "UNUSED_CAPABILITY"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "refs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "code",
+        "path",
+        "refs",
+        "message"
+      ],
+      "title": "CatalogIssue",
+      "type": "object"
+    },
+    "CheckBookingArgs": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "CheckBookingArgs",
+      "type": "object"
+    },
+    "Cleared": {
+      "description": "An earlier choice an update removed because it no longer fits.",
+      "properties": {
+        "field": {
+          "enum": [
+            "service_id",
+            "provider_id",
+            "location_id",
+            "slot_id"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "value",
+        "reason",
+        "message"
+      ],
+      "title": "Cleared",
+      "type": "object"
+    },
+    "DraftView": {
+      "properties": {
+        "revision": {
+          "type": "integer"
+        },
+        "patient": {
+          "$ref": "#/$defs/Facts"
+        },
+        "service": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SlotView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confirmed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "confirmation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "revision",
+        "patient"
+      ],
+      "title": "DraftView",
+      "type": "object"
+    },
+    "Edge": {
+      "additionalProperties": true,
+      "description": "A transition out of a node, exposed to the LLM as a callable tool.",
+      "properties": {
+        "function": {
+          "description": "Tool name the LLM calls to take this edge.",
+          "type": "string"
+        },
+        "description": {
+          "description": "When the model should call it.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Name of the node to transition to.",
+          "type": "string"
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertySchema"
+          },
+          "description": "Values to collect on this edge, as JSON-schema properties."
+        },
+        "required": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "guard": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A named check that must pass before the edge is taken (see the registry)."
+        },
+        "auto_after": {
+          "description": "Node tools after which the edge is taken without an LLM call, when the call changed the state and the guard passes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "function",
+        "description",
+        "target"
+      ],
+      "title": "Edge",
+      "type": "object"
+    },
+    "EndConversationAction": {
+      "additionalProperties": true,
+      "description": "End the call, optionally saying `text` first (Pipecat's built-in `end_conversation`).",
+      "properties": {
+        "type": {
+          "const": "end_conversation",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "append_text_to_context": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "EndConversationAction",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "errors": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArgError"
+          },
+          "type": "array"
+        },
+        "violations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "type": "array"
+        },
+        "next_question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Question"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "Excluded": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "reason"
+      ],
+      "title": "Excluded",
+      "type": "object"
+    },
+    "Facts": {
+      "description": "The caller's facts; null means not known yet.",
+      "properties": {
+        "is_new_patient": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has_referral": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "is_new_patient",
+        "has_referral"
+      ],
+      "title": "Facts",
+      "type": "object"
+    },
+    "FindLocationsArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The place the caller said, e.g. 'downtown'."
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "description": "A service id from search_services.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "description": "A provider id from find_providers.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "description": "next_cursor from the previous result.",
+              "pattern": "^\\d{1,4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "FindLocationsArgs",
+      "type": "object"
+    },
+    "FindProvidersArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The name the caller said, e.g. 'Dr. Chen'."
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "description": "A service id from search_services.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "description": "A location id from find_locations.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "specialty": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider's own specialty label."
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "description": "next_cursor from the previous result.",
+              "pattern": "^\\d{1,4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "FindProvidersArgs",
+      "type": "object"
+    },
+    "GuardSpec": {
+      "properties": {
+        "name": {
+          "enum": [
+            "service_chosen",
+            "booking_ready",
+            "slot_selected",
+            "booking_completed",
+            "request_recorded"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "completes": {
+          "items": {
+            "enum": [
+              "catalog_overview",
+              "search_services",
+              "find_providers",
+              "find_locations",
+              "apply_request",
+              "update_booking",
+              "check_booking",
+              "get_availability",
+              "book_appointment"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "completes"
+      ],
+      "title": "GuardSpec",
+      "type": "object"
+    },
+    "Issue": {
+      "description": "One problem with an agent document.",
+      "properties": {
+        "level": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "node": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "edge": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "path",
+        "node",
+        "edge",
+        "message"
+      ],
+      "title": "Issue",
+      "type": "object"
+    },
+    "IssuesResponse": {
+      "properties": {
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/Issue"
+          },
+          "type": "array"
+        },
+        "malformed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "issues",
+        "malformed"
+      ],
+      "title": "IssuesResponse",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LintResponse": {
+      "properties": {
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/CatalogIssue"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "issues"
+      ],
+      "title": "LintResponse",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "hours": {
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "enum": [
+              "imaging",
+              "lab",
+              "physical_therapy",
+              "dental",
+              "surgery"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "address",
+        "city",
+        "phone",
+        "hours",
+        "capabilities"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "LocationCard": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "conditions": {
+          "default": [],
+          "items": {
+            "enum": [
+              "has_referral",
+              "is_new_patient"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "LocationCard",
+      "type": "object"
+    },
+    "LocationSearch": {
+      "properties": {
+        "total_matches": {
+          "type": "integer"
+        },
+        "ambiguous": {
+          "default": false,
+          "type": "boolean"
+        },
+        "clarify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "excluded": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Excluded"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/LocationCard"
+          },
+          "type": "array"
+        },
+        "violations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "total_matches",
+        "locations"
+      ],
+      "title": "LocationSearch",
+      "type": "object"
+    },
+    "Message": {
+      "additionalProperties": true,
+      "description": "An LLM message, passed to Pipecat verbatim (any additional fields included).",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "Node": {
+      "additionalProperties": true,
+      "description": "A single conversational state. Fields mirror Pipecat Flows' NodeConfig.",
+      "properties": {
+        "name": {
+          "description": "Unique within the agent; edges target nodes by name.",
+          "type": "string"
+        },
+        "task_messages": {
+          "description": "This node's objectives.",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "role_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Overrides the agent persona."
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "description": "Registry tools the node exposes besides its edges.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enter_tools": {
+          "description": "Registry tools run without arguments when the node is entered; their results are added to the result of the transition into it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_actions": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TtsSayAction"
+              },
+              {
+                "$ref": "#/$defs/EndConversationAction"
+              },
+              {
+                "$ref": "#/$defs/Action"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "post_actions": {
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TtsSayAction"
+              },
+              {
+                "$ref": "#/$defs/EndConversationAction"
+              },
+              {
+                "$ref": "#/$defs/Action"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "end": {
+          "default": false,
+          "description": "Terminal: the call ends after this node.",
+          "type": "boolean"
+        },
+        "ui": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Node",
+      "type": "object"
+    },
+    "Offer": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "integer"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/Slot"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "revision",
+        "slots"
+      ],
+      "title": "Offer",
+      "type": "object"
+    },
+    "OptionView": {
+      "properties": {
+        "service_id": {
+          "type": "string"
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "label": {
+          "type": "string"
+        },
+        "conditions": {
+          "default": [],
+          "items": {
+            "enum": [
+              "has_referral",
+              "is_new_patient"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "service_id",
+        "label"
+      ],
+      "title": "OptionView",
+      "type": "object"
+    },
+    "Overview": {
+      "properties": {
+        "section": {
+          "enum": [
+            "locations",
+            "specialties"
+          ],
+          "type": "string"
+        },
+        "locations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LocationCard"
+          },
+          "type": "array"
+        },
+        "specialties": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "not_offered": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "section"
+      ],
+      "title": "Overview",
+      "type": "object"
+    },
+    "OverviewArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "description": "next_cursor from the previous result.",
+              "pattern": "^\\d{1,4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "OverviewArgs",
+      "type": "object"
+    },
+    "PatientArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "is_new_patient": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True if the caller has never been seen at our clinics."
+        },
+        "has_referral": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether a referral is on file for the service."
+        }
+      },
+      "title": "PatientArgs",
+      "type": "object"
+    },
+    "PatientFacts": {
+      "additionalProperties": false,
+      "description": "What the caller has told us about themselves. None means not known yet.",
+      "properties": {
+        "is_new_patient": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "has_referral": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "is_new_patient",
+        "has_referral"
+      ],
+      "title": "PatientFacts",
+      "type": "object"
+    },
+    "PlaygroundSession": {
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "ttl_s": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session_id",
+        "state",
+        "ttl_s"
+      ],
+      "title": "PlaygroundSession",
+      "type": "object"
+    },
+    "Position": {
+      "additionalProperties": true,
+      "description": "A node's canvas position. The compiler ignores it.",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Position",
+      "type": "object"
+    },
+    "PropertySchema": {
+      "additionalProperties": true,
+      "description": "A JSON-schema property for a value an edge collects.\n\nOnly the keywords the builder's forms edit are declared; any other keyword\n(`items`, `minimum`, ...) is preserved and passed to the LLM unchanged.",
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "enum": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "PropertySchema",
+      "type": "object"
+    },
+    "Provider": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "enum": [
+            "MD",
+            "DO",
+            "NP",
+            "PA"
+          ],
+          "type": "string"
+        },
+        "specialty": {
+          "type": "string"
+        },
+        "location_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "accepting_new_patients": {
+          "type": "boolean"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "appointment_type_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "title",
+        "specialty",
+        "location_ids",
+        "accepting_new_patients",
+        "languages",
+        "appointment_type_ids"
+      ],
+      "title": "Provider",
+      "type": "object"
+    },
+    "ProviderCard": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "specialty": {
+          "type": "string"
+        },
+        "accepting_new_patients": {
+          "type": "boolean"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "locations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "title",
+        "specialty",
+        "accepting_new_patients",
+        "languages",
+        "locations"
+      ],
+      "title": "ProviderCard",
+      "type": "object"
+    },
+    "ProviderSearch": {
+      "properties": {
+        "total_matches": {
+          "type": "integer"
+        },
+        "ambiguous": {
+          "default": false,
+          "type": "boolean"
+        },
+        "clarify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "excluded": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Excluded"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderCard"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "total_matches",
+        "providers"
+      ],
+      "title": "ProviderSearch",
+      "type": "object"
+    },
+    "Question": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "fact",
+            "choice"
+          ],
+          "type": "string"
+        },
+        "field": {
+          "enum": [
+            "service_id",
+            "provider_id",
+            "location_id",
+            "has_referral",
+            "is_new_patient"
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "field",
+        "prompt"
+      ],
+      "title": "Question",
+      "type": "object"
+    },
+    "Receipt": {
+      "properties": {
+        "confirmation": {
+          "type": "string"
+        },
+        "slot": {
+          "$ref": "#/$defs/Slot"
+        },
+        "patient": {
+          "$ref": "#/$defs/PatientFacts"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "draft_revision": {
+          "type": "integer"
+        },
+        "booked_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "confirmation",
+        "slot",
+        "patient",
+        "session_id",
+        "draft_revision",
+        "booked_at"
+      ],
+      "title": "Receipt",
+      "type": "object"
+    },
+    "ReceiptView": {
+      "properties": {
+        "confirmation": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        },
+        "duration_min": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "confirmation",
+        "service",
+        "provider",
+        "location",
+        "start",
+        "duration_min"
+      ],
+      "title": "ReceiptView",
+      "type": "object"
+    },
+    "Ref": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "Ref",
+      "type": "object"
+    },
+    "RequestClarification": {
+      "properties": {
+        "field": {
+          "enum": [
+            "service_text",
+            "provider_text",
+            "location_text"
+          ],
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "ambiguous",
+            "no_match",
+            "confirm_match"
+          ],
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "type": "array"
+        },
+        "total_matches": {
+          "type": "integer"
+        },
+        "clarify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lookup_tool": {
+          "type": "string"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "query",
+        "reason",
+        "candidates",
+        "total_matches",
+        "lookup_tool",
+        "hint"
+      ],
+      "title": "RequestClarification",
+      "type": "object"
+    },
+    "RequestView": {
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DraftView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cleared": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Cleared"
+          },
+          "type": "array"
+        },
+        "clarification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestClarification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "title": "RequestView",
+      "type": "object"
+    },
+    "SearchServicesArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "description": "What the caller asked for, in their words (e.g. 'knee MRI').",
+          "minLength": 1,
+          "type": "string"
+        },
+        "specialty": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only services with this specialty label."
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "description": "next_cursor from the previous result.",
+              "pattern": "^\\d{1,4}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "SearchServicesArgs",
+      "type": "object"
+    },
+    "ServiceCard": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "specialty": {
+          "type": "string"
+        },
+        "duration_min": {
+          "type": "integer"
+        },
+        "requires_referral": {
+          "type": "boolean"
+        },
+        "new_patients_allowed": {
+          "type": "boolean"
+        },
+        "notes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "specialty",
+        "duration_min",
+        "requires_referral",
+        "new_patients_allowed"
+      ],
+      "title": "ServiceCard",
+      "type": "object"
+    },
+    "ServiceSearch": {
+      "properties": {
+        "total_matches": {
+          "type": "integer"
+        },
+        "ambiguous": {
+          "default": false,
+          "type": "boolean"
+        },
+        "clarify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "excluded": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Excluded"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/ServiceCard"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "total_matches",
+        "services"
+      ],
+      "title": "ServiceSearch",
+      "type": "object"
+    },
+    "SessionState": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "patient": {
+          "$ref": "#/$defs/PatientFacts"
+        },
+        "draft": {
+          "$ref": "#/$defs/BookingDraft"
+        },
+        "revision": {
+          "default": 0,
+          "type": "integer"
+        },
+        "confirmed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "offer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Offer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reservation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Receipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "patient",
+        "draft",
+        "revision",
+        "confirmed",
+        "offer",
+        "reservation"
+      ],
+      "title": "SessionState",
+      "type": "object"
+    },
+    "Slot": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "service_id": {
+          "type": "string"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "location_id": {
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "service_id",
+        "provider_id",
+        "location_id",
+        "start",
+        "end"
+      ],
+      "title": "Slot",
+      "type": "object"
+    },
+    "SlotView": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "label"
+      ],
+      "title": "SlotView",
+      "type": "object"
+    },
+    "StatusView": {
+      "properties": {
+        "status": {
+          "enum": [
+            "ready",
+            "needs_choice",
+            "blocked"
+          ],
+          "type": "string"
+        },
+        "next_question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Question"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/OptionView"
+          },
+          "type": "array"
+        },
+        "total_options": {
+          "default": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "violations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "type": "array"
+        },
+        "hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "StatusView",
+      "type": "object"
+    },
+    "ToolArgs": {
+      "properties": {
+        "catalog_overview": {
+          "$ref": "#/$defs/OverviewArgs"
+        },
+        "search_services": {
+          "$ref": "#/$defs/SearchServicesArgs"
+        },
+        "find_providers": {
+          "$ref": "#/$defs/FindProvidersArgs"
+        },
+        "find_locations": {
+          "$ref": "#/$defs/FindLocationsArgs"
+        },
+        "apply_request": {
+          "$ref": "#/$defs/ApplyRequestArgs"
+        },
+        "update_booking": {
+          "$ref": "#/$defs/UpdateBookingArgs"
+        },
+        "check_booking": {
+          "$ref": "#/$defs/CheckBookingArgs"
+        },
+        "get_availability": {
+          "$ref": "#/$defs/AvailabilityArgs"
+        },
+        "book_appointment": {
+          "$ref": "#/$defs/BookAppointmentArgs"
+        }
+      },
+      "required": [
+        "catalog_overview",
+        "search_services",
+        "find_providers",
+        "find_locations",
+        "apply_request",
+        "update_booking",
+        "check_booking",
+        "get_availability",
+        "book_appointment"
+      ],
+      "title": "ToolArgs",
+      "type": "object"
+    },
+    "ToolErrorResult": {
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorDetail"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ToolErrorResult",
+      "type": "object"
+    },
+    "ToolResults": {
+      "properties": {
+        "catalog_overview": {
+          "$ref": "#/$defs/Overview"
+        },
+        "search_services": {
+          "$ref": "#/$defs/ServiceSearch"
+        },
+        "find_providers": {
+          "$ref": "#/$defs/ProviderSearch"
+        },
+        "find_locations": {
+          "$ref": "#/$defs/LocationSearch"
+        },
+        "apply_request": {
+          "$ref": "#/$defs/RequestView"
+        },
+        "update_booking": {
+          "$ref": "#/$defs/UpdateView"
+        },
+        "check_booking": {
+          "$ref": "#/$defs/BookingView"
+        },
+        "get_availability": {
+          "$ref": "#/$defs/Availability"
+        },
+        "book_appointment": {
+          "$ref": "#/$defs/ReceiptView"
+        }
+      },
+      "required": [
+        "catalog_overview",
+        "search_services",
+        "find_providers",
+        "find_locations",
+        "apply_request",
+        "update_booking",
+        "check_booking",
+        "get_availability",
+        "book_appointment"
+      ],
+      "title": "ToolResults",
+      "type": "object"
+    },
+    "ToolRunRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "args": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "ToolRunRequest",
+      "type": "object"
+    },
+    "ToolRunResponse": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "approx_tokens": {
+          "description": "Estimated size of `result` (about 4 characters a token), not a tokenizer count.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "result",
+        "state",
+        "approx_tokens"
+      ],
+      "title": "ToolRunResponse",
+      "type": "object"
+    },
+    "ToolSpec": {
+      "properties": {
+        "name": {
+          "enum": [
+            "catalog_overview",
+            "search_services",
+            "find_providers",
+            "find_locations",
+            "apply_request",
+            "update_booking",
+            "check_booking",
+            "get_availability",
+            "book_appointment"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "parameters"
+      ],
+      "title": "ToolSpec",
+      "type": "object"
+    },
+    "ToolsResponse": {
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolSpec"
+          },
+          "type": "array"
+        },
+        "guards": {
+          "items": {
+            "$ref": "#/$defs/GuardSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools",
+        "guards"
+      ],
+      "title": "ToolsResponse",
+      "type": "object"
+    },
+    "TtsSayAction": {
+      "additionalProperties": true,
+      "description": "Speak `text` (Pipecat's built-in `tts_say`).",
+      "properties": {
+        "type": {
+          "const": "tts_say",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "append_text_to_context": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "TtsSayAction",
+      "type": "object"
+    },
+    "UpdateBookingArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "patient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatientArgs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Facts the caller stated; null for one fact clears it."
+        },
+        "service_id": {
+          "anyOf": [
+            {
+              "description": "A service id from search_services.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "description": "A provider id from find_providers.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "location_id": {
+          "anyOf": [
+            {
+              "description": "A location id from find_locations.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A slot id from get_availability that the caller picked."
+        }
+      },
+      "title": "UpdateBookingArgs",
+      "type": "object"
+    },
+    "UpdateView": {
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/DraftView"
+        },
+        "check": {
+          "$ref": "#/$defs/StatusView"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "cleared": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Cleared"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "draft",
+        "check",
+        "changed"
+      ],
+      "title": "UpdateView",
+      "type": "object"
+    },
+    "Violation": {
+      "properties": {
+        "code": {
+          "enum": [
+            "PROVIDER_NOT_AT_LOCATION",
+            "PROVIDER_DOESNT_OFFER",
+            "LOCATION_LACKS_CAPABILITY",
+            "REFERRAL_REQUIRED",
+            "TYPE_NOT_FOR_NEW_PATIENTS",
+            "PROVIDER_NOT_ACCEPTING",
+            "NOT_OFFERED",
+            "NO_FEASIBLE_OPTION"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "fields": {
+          "default": [],
+          "items": {
+            "enum": [
+              "service_id",
+              "provider_id",
+              "location_id"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "default": [],
+          "items": {
+            "enum": [
+              "has_referral",
+              "is_new_patient"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fix"
+      ],
+      "title": "Violation",
+      "type": "object"
+    }
+  },
+  "title": "AgentBuilderContract"
+}

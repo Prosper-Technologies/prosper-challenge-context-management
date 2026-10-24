@@ -1,9 +1,20 @@
-# Pipecat voice agent stack (verified against pipecat-ai v1.4.0).
+# Direct runtime dependencies. Exact versions are locked in requirements-dev.lock
+# (`make lock`); `make install` installs from the lock.
+#
+# Pipecat voice agent stack, pinned to the verified release:
 # - runner:     dev runner + prebuilt WebRTC client UI (pipecat-ai-prebuilt), FastAPI/uvicorn
 # - webrtc:     SmallWebRTC transport (aiortc)
 # - silero:     Silero VAD (voice activity detection)
 # - elevenlabs / openai: service extras
-# OpenAI is a core pipecat dependency; the elevenlabs services need no extra SDK.
-pipecat-ai[runner,webrtc,silero,elevenlabs,openai]>=1.4.0,<2
-# Pipecat Flows: node-graph conversations (used by flow_agent.py).
-pipecat-ai-flows>=1.3.0,<2
+# The runtime adapter (agent_builder/runtime.py) hooks FlowManager internals, so
+# update these deliberately, after tests/test_runtime.py passes on the new version.
+pipecat-ai[runner,webrtc,silero,elevenlabs,openai]==1.4.0
+# Pipecat Flows: node-graph conversations.
+pipecat-ai-flows==1.4.0
+# Used directly: the agent schema, the builder API, logging, .env loading and the
+# evaluation's OpenAI client (backend/eval/).
+pydantic>=2.11,<3
+fastapi>=0.115,<1
+loguru>=0.7,<1
+python-dotenv>=1.0,<2
+openai>=2.0,<3

@@ -1,0 +1,474 @@
+[
+  {
+    "id": "garcia_checkup_new_patient",
+    "description": "\"Dr. Garcia\" matches three providers and \"checkup\" two services; once both are resolved, a multi-location provider still needs a location.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": true,
+      "has_referral": false,
+      "opening": "Hi, I'm a new patient and I'd like a checkup with Dr. Garcia.",
+      "details": [
+        "It's Maria Garcia, the family medicine one, not the pediatrician.",
+        "An annual physical.",
+        "Midtown works best."
+      ]
+    },
+    "outcome": {"booked": [{"service_id": "appt_002", "provider_id": "prov_003", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "find_providers", "args": {"name": "Dr. Garcia"},
+       "expect": {"ids": ["prov_002", "prov_003", "prov_008"], "ambiguous": true, "clarify": "specialty"}},
+      {"op": "search_services", "args": {"query": "checkup"},
+       "expect": {"ids": ["appt_002", "appt_003", "appt_015", "appt_075"], "ambiguous": true}},
+      {"op": "update", "args": {"patient": {"is_new_patient": true}},
+       "expect": {"status": "needs_choice", "next": "service_id"}},
+      {"op": "update", "args": {"service_id": "appt_002", "provider_id": "prov_003"},
+       "expect": {"status": "needs_choice", "next": "location_id", "total_options": 3,
+                  "options": [{"location_id": "loc_002"}, {"location_id": "loc_005"}, {"location_id": "loc_007"}]}},
+      {"op": "update", "args": {"location_id": "loc_005"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "ramirez_knee_mri",
+    "description": "Two Dr. Linda Ramirezes; only the radiologist offers MRI, and only at Downtown, which has imaging.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "I need an MRI of my knee with Dr. Ramirez.",
+      "details": ["Yes, I've been seen there before.", "My doctor sent the referral already."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_065", "provider_id": "prov_014", "location_id": "loc_004"}]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "MRI of my knee"}, "expect": {"ids": ["appt_065"], "ambiguous": false}},
+      {"op": "find_providers", "args": {"name": "Dr. Ramirez", "service_id": "appt_065"},
+       "expect": {"ids": ["prov_014"], "ambiguous": false, "excluded": ["prov_005", "prov_021"]}},
+      {"op": "update", "args": {"service_id": "appt_065", "provider_id": "prov_014"},
+       "expect": {"status": "needs_choice", "next": "has_referral", "options": [{"location_id": "loc_004"}]}},
+      {"op": "update", "args": {"patient": {"has_referral": true}}, "expect": {"next": "is_new_patient"}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}},
+       "expect": {"status": "needs_choice", "next": "location_id", "total_options": 1}},
+      {"op": "find_locations", "args": {"query": "Downtown"}, "expect": {"ids": ["loc_004"]}},
+      {"op": "update", "args": {"location_id": "loc_004"}, "expect": {"status": "ready"}},
+      {"op": "offer", "args": {"day": "2026-10-21"}, "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 1}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "knee_mri_unknown_facts",
+    "description": "Unknown facts are asked, not assumed; then only the two valid provider/location combinations are offered.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "Can I get a knee MRI?",
+      "details": ["Yes, I have a referral.", "I'm an existing patient.", "Midtown, please."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_065", "provider_id": "prov_015", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "update", "args": {"service_id": "appt_065"},
+       "expect": {"status": "needs_choice", "next": "has_referral", "total_options": 2, "unresolved": ["has_referral", "is_new_patient"]}},
+      {"op": "offer", "expect": {"error": "NOT_READY"}},
+      {"op": "update", "args": {"patient": {"has_referral": true}}, "expect": {"next": "is_new_patient"}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}},
+       "expect": {"next": "provider_id",
+                  "options": [{"provider_id": "prov_014", "location_id": "loc_004"}, {"provider_id": "prov_015", "location_id": "loc_005"}]}},
+      {"op": "update", "args": {"provider_id": "prov_015", "location_id": "loc_005"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "echo_david_chen_richmond",
+    "description": "Dr. David Chen practices at Richmond, but Richmond has no imaging for an echocardiogram; the fix names his imaging locations.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "I need an echocardiogram with Dr. David Chen at the Richmond clinic.",
+      "details": ["I have a referral from my cardiologist.", "If Richmond can't, Downtown is fine."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_004"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false, "has_referral": true}, "service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_007"},
+       "expect": {"status": "blocked", "violations": ["LOCATION_LACKS_CAPABILITY"],
+                  "fix_mentions": ["Mission District Family Clinic", "Downtown Health Center"]}},
+      {"op": "update", "args": {"location_id": "loc_004"}, "expect": {"status": "ready", "cleared": []}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "dental_north_gate",
+    "description": "North Gate has no dental capability; Mission District is the only dental location. The caller insists on North Gate.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I'd like a teeth cleaning at North Gate.",
+      "details": ["It has to be North Gate, I can't get anywhere else."]
+    },
+    "outcome": {"blocked": ["LOCATION_LACKS_CAPABILITY"]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "teeth cleaning"}, "expect": {"ids": ["appt_074"]}},
+      {"op": "find_locations", "args": {"query": "northgate"}, "expect": {"ids": ["loc_003"]}},
+      {"op": "find_locations", "args": {"query": "North"}, "expect": {"ids": ["loc_002", "loc_003"], "ambiguous": true}},
+      {"op": "update", "args": {"service_id": "appt_074", "location_id": "loc_003"},
+       "expect": {"status": "blocked", "violations": ["LOCATION_LACKS_CAPABILITY"], "fix_mentions": ["Mission District Family Clinic"]}}
+    ]
+  },
+  {
+    "id": "obgyn_new_patient",
+    "description": "The only OB/GYN provider isn't accepting new patients, so a new-patient visit is a dead end.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": true,
+      "has_referral": false,
+      "opening": "I'm new here and need to see an OB/GYN.",
+      "details": []
+    },
+    "outcome": {"blocked": ["PROVIDER_NOT_ACCEPTING"]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": true}, "service_id": "appt_040"},
+       "expect": {"status": "blocked", "violations": ["PROVIDER_NOT_ACCEPTING"]}},
+      {"op": "update", "args": {"provider_id": "prov_036"},
+       "expect": {"status": "blocked", "violations": ["PROVIDER_NOT_ACCEPTING"]}}
+    ]
+  },
+  {
+    "id": "xray_new_patient",
+    "description": "X-rays are for existing patients only; the fix suggests a radiology service open to new patients.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": true,
+      "has_referral": true,
+      "opening": "I need an x-ray. I haven't been to your clinics before.",
+      "details": ["I have a referral."]
+    },
+    "outcome": {"blocked": ["TYPE_NOT_FOR_NEW_PATIENTS"]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "xray"}, "expect": {"ids": ["appt_062"]}},
+      {"op": "update", "args": {"patient": {"is_new_patient": true, "has_referral": true}, "service_id": "appt_062"},
+       "expect": {"status": "blocked", "violations": ["TYPE_NOT_FOR_NEW_PATIENTS"], "fix_mentions": ["Mammogram"]}}
+    ]
+  },
+  {
+    "id": "mammogram_new_patient",
+    "description": "A mammogram is open to new patients and needs no referral, so neither is asked about the service.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": true,
+      "has_referral": false,
+      "opening": "I'd like to schedule a mammogram, I'm a new patient.",
+      "details": ["Downtown is closest to me."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_068", "location_id": "loc_004"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": true}, "service_id": "appt_068"},
+       "expect": {"status": "needs_choice", "next": "provider_id", "total_options": 2, "unresolved": []}},
+      {"op": "update", "args": {"location_id": "loc_004"},
+       "expect": {"next": "provider_id", "options": [{"provider_id": "prov_014", "location_id": "loc_004"}]}},
+      {"op": "update", "args": {"provider_id": "prov_014"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 2}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "ophthalmology_not_offered",
+    "description": "Eye exams are in the catalog but no provider offers them; unrelated requests match nothing.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I need an eye exam.",
+      "details": []
+    },
+    "outcome": {"blocked": ["NOT_OFFERED"]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "pizza delivery"}, "expect": {"ids": [], "total": 0}},
+      {"op": "search_services", "args": {"query": "eye exam"}, "expect": {"ids": ["appt_045", "appt_046"], "ambiguous": false}},
+      {"op": "update", "args": {"service_id": "appt_045"}, "expect": {"status": "blocked", "violations": ["NOT_OFFERED"]}}
+    ]
+  },
+  {
+    "id": "multi_location_provider",
+    "description": "Dr. Kenji Kim practices at four locations: the draft is never ready before the location is chosen.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "Can I get a skin cancer screening with Dr. Kim?",
+      "details": ["Kenji Kim, the dermatologist.", "Sunset, please."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_027", "provider_id": "prov_027", "location_id": "loc_006"}]},
+    "steps": [
+      {"op": "find_providers", "args": {"name": "Dr. Kim"}, "expect": {"ids": ["prov_027", "prov_033"], "ambiguous": true}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}, "service_id": "appt_027", "provider_id": "prov_027"},
+       "expect": {"status": "needs_choice", "next": "location_id", "total_options": 4, "truncated": true}},
+      {"op": "offer", "expect": {"error": "NOT_READY"}},
+      {"op": "update", "args": {"location_id": "loc_006"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "chen_paging",
+    "description": "Seven providers match \"Dr. Chen\": the first page shows five, and the cursor reaches the other two.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I want an annual physical with Dr. Chen.",
+      "details": ["Lucas Chen, my family doctor."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_002", "provider_id": "prov_047", "location_id": "loc_000"}]},
+    "steps": [
+      {"op": "find_providers", "args": {"name": "Dr. Chen"},
+       "expect": {"ids": ["prov_000", "prov_001", "prov_004", "prov_012", "prov_039"], "total": 7, "truncated": true, "next_cursor": "5", "clarify": "specialty"}},
+      {"op": "find_providers", "args": {"name": "Dr. Chen", "cursor": "5"},
+       "expect": {"ids": ["prov_046", "prov_047"], "total": 7, "truncated": false}},
+      {"op": "find_providers", "args": {"name": "Dr. Chen", "service_id": "appt_002"},
+       "expect": {"ids": ["prov_004", "prov_012", "prov_047"], "total": 3}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}, "service_id": "appt_002", "provider_id": "prov_047"},
+       "expect": {"status": "needs_choice", "next": "location_id", "total_options": 1}},
+      {"op": "update", "args": {"location_id": "loc_000"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "correction_new_patient",
+    "description": "A late correction to new-patient status clears a provider who isn't accepting new patients, keeps the location, and invalidates the offered time.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": true,
+      "has_referral": false,
+      "opening": "Annual physical with Dr. Sarah Martinez downtown, please. I've been there before.",
+      "details": ["Oh wait, actually I've never been seen there, I'm a new patient.", "Anyone downtown is fine then."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_002", "location_id": "loc_004"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false}, "service_id": "appt_002", "provider_id": "prov_043", "location_id": "loc_004"},
+       "expect": {"status": "ready", "revision": 1}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"revision": 2}},
+      {"op": "update", "args": {"patient": {"is_new_patient": true}},
+       "expect": {"status": "needs_choice", "next": "provider_id", "revision": 3, "cleared": ["provider_id", "slot_id"],
+                  "draft": {"service_id": "appt_002", "provider_id": null, "location_id": "loc_004", "slot_id": null}}},
+      {"op": "update", "args": {"provider_id": "prov_045"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "correction_service",
+    "description": "Changing the service keeps compatible choices, clears incompatible downstream ones, and keeps an explicit infeasible request so it can be explained.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "I need an echocardiogram with Dr. David Chen at Mission District.",
+      "details": ["Actually, just an EKG.", "Sorry, I meant a knee MRI.", "Midtown is fine."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_065", "provider_id": "prov_015", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false, "has_referral": true}, "service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_001"},
+       "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "update", "args": {"service_id": "appt_023"},
+       "expect": {"status": "ready", "cleared": ["slot_id"], "draft": {"provider_id": "prov_000", "location_id": "loc_001"}}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"error": "invalid"}},
+      {"op": "update", "args": {"service_id": "appt_065"},
+       "expect": {"status": "needs_choice", "next": "provider_id", "cleared": ["provider_id", "location_id"], "total_options": 2}},
+      {"op": "update", "args": {"provider_id": "prov_046"},
+       "expect": {"status": "blocked", "violations": ["PROVIDER_DOESNT_OFFER"], "cleared": [], "draft": {"service_id": "appt_065", "provider_id": "prov_046"}}},
+      {"op": "update", "args": {"provider_id": "prov_015", "location_id": "loc_005"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "upstream_conflict_kept",
+    "description": "Moving to a location without imaging doesn't drop the MRI: the upstream choice stays and the conflict is reported.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "Knee MRI with Dr. Hannah Nguyen at Midtown.",
+      "details": ["Could it be at Mission Bay instead?", "OK, Midtown then."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_065", "provider_id": "prov_015", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false, "has_referral": true}, "service_id": "appt_065", "provider_id": "prov_015", "location_id": "loc_005"},
+       "expect": {"status": "ready"}},
+      {"op": "update", "args": {"location_id": "loc_000"},
+       "expect": {"status": "blocked", "violations": ["LOCATION_LACKS_CAPABILITY"], "cleared": [],
+                  "draft": {"service_id": "appt_065", "provider_id": "prov_015", "location_id": "loc_000"}}},
+      {"op": "update", "args": {"location_id": "loc_005"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "invalid_updates_are_atomic",
+    "description": "An update with an unknown ID or a malformed fact is rejected whole; nothing in it is applied.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I'd like a flu shot.",
+      "details": []
+    },
+    "outcome": {"booked": [{"service_id": "appt_011"}]},
+    "steps": [
+      {"op": "update", "args": {"service_id": "appt_011", "provider_id": "prov_999"}, "expect": {"error": "invalid", "revision": 0, "draft": {"service_id": null}}},
+      {"op": "update", "args": {"service_id": "appt_011", "patient": {"is_new_patient": "no"}}, "expect": {"error": "invalid", "revision": 0}},
+      {"op": "update", "args": {"service_id": "appt_011", "colour": "blue"}, "expect": {"error": "invalid", "revision": 0}},
+      {"op": "update", "args": {"service_id": "appt_011", "provider_id": "prov_047", "location_id": "loc_000"},
+       "expect": {"status": "ready", "revision": 1}},
+      {"op": "update", "args": {"service_id": "appt_011"}, "expect": {"changed": false, "revision": 1}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "overlapping_reservations",
+    "description": "Two calls are offered overlapping times with Dr. David Chen at different clinics for different services; the second booking is refused, and a retry of the first returns the same receipt.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": true,
+      "opening": "I need an echocardiogram with Dr. David Chen at Mission District, as early as possible.",
+      "details": []
+    },
+    "outcome": {"booked": [{"service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_001"}]},
+    "prebooked": [{"service_id": "appt_023", "provider_id": "prov_000", "location_id": "loc_000", "start": "2026-10-19T09:00:00-07:00"}],
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false, "has_referral": true}, "service_id": "appt_021", "provider_id": "prov_000", "location_id": "loc_001"},
+       "expect": {"status": "ready"}},
+      {"op": "update", "session": "b", "args": {"patient": {"is_new_patient": false}, "service_id": "appt_023", "provider_id": "prov_000", "location_id": "loc_000"},
+       "expect": {"status": "ready"}},
+      {"op": "offer", "args": {"day": "2026-10-19"}, "expect": {"count": 3}},
+      {"op": "offer", "session": "b", "args": {"day": "2026-10-19"}, "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 1}}},
+      {"op": "update", "session": "b", "args": {"slot_id": {"overlapping": "a"}}},
+      {"op": "book", "expect": {"booked": true}},
+      {"op": "book", "expect": {"booked": true, "same_receipt": true}},
+      {"op": "book", "session": "b", "expect": {"error": "SLOT_UNAVAILABLE"}},
+      {"op": "offer", "session": "b", "args": {"day": "2026-10-19"}, "expect": {"none_overlapping": "a"}}
+    ]
+  },
+  {
+    "id": "stale_confirmation",
+    "description": "Confirmation belongs to one draft revision: a change after confirming requires confirming again.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "A flu shot with Dr. Lucas Chen, please.",
+      "details": ["Actually, the second time you mentioned is better."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_011", "provider_id": "prov_047"}]},
+    "steps": [
+      {"op": "update", "args": {"patient": {"is_new_patient": false}, "service_id": "appt_011", "provider_id": "prov_047", "location_id": "loc_000"},
+       "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"error": "NO_SLOT"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"revision": 2}},
+      {"op": "book", "args": {"confirm": false}, "expect": {"error": "NOT_CONFIRMED"}},
+      {"op": "book", "args": {"revision": 1}, "expect": {"error": "STALE_REVISION"}},
+      {"op": "update", "args": {"slot_id": {"offered": 1}}, "expect": {"revision": 3}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+    },
+  {
+    "id": "mission_blood_draw",
+    "description": "\"The Mission clinic\" matches Mission Bay and Mission District. Both have lab rooms, but the only lab provider works at Mission Bay, so Mission District has no feasible option.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "I need to get blood work done at the Mission clinic.",
+      "details": ["I'm not sure which Mission one, whichever does blood draws."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_072", "provider_id": "prov_038", "location_id": "loc_000"}]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "blood work"}, "expect": {"ids": ["appt_072"], "ambiguous": false}},
+      {"op": "find_locations", "args": {"query": "the Mission clinic"}, "expect": {"ids": ["loc_000", "loc_001"], "ambiguous": true, "clarify": "name"}},
+      {"op": "update", "args": {"service_id": "appt_072"},
+       "expect": {"status": "needs_choice", "next": "provider_id", "total_options": 1, "options": [{"provider_id": "prov_038", "location_id": "loc_000"}]}},
+      {"op": "update", "args": {"location_id": "loc_001"}, "expect": {"status": "blocked", "violations": ["NO_FEASIBLE_OPTION"]}},
+      {"op": "update", "args": {"location_id": "loc_000"}, "expect": {"status": "needs_choice", "next": "provider_id"}},
+      {"op": "update", "args": {"provider_id": "prov_038"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "late_location_change",
+    "description": "After times are offered and one is picked, the caller moves to another of the provider's locations: the provider stays, and the picked time is cleared.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "Can I book a flu shot with Dr. Nina Nguyen at the Downtown clinic?",
+      "details": ["Actually, could we do Midtown instead? It's closer to my work."]
+    },
+    "outcome": {"booked": [{"service_id": "appt_011", "provider_id": "prov_016", "location_id": "loc_005"}]},
+    "steps": [
+      {"op": "find_providers", "args": {"name": "Dr. Nguyen"}, "expect": {"total": 8, "ambiguous": true, "clarify": "specialty", "truncated": true}},
+      {"op": "find_providers", "args": {"name": "Nina Nguyen"}, "expect": {"ids": ["prov_016"], "ambiguous": false}},
+      {"op": "update", "args": {"service_id": "appt_011", "provider_id": "prov_016", "location_id": "loc_004"}, "expect": {"status": "ready", "revision": 1}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"revision": 2}},
+      {"op": "update", "args": {"location_id": "loc_005"},
+       "expect": {"status": "ready", "cleared": ["slot_id"], "draft": {"provider_id": "prov_016", "location_id": "loc_005", "slot_id": null}}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  },
+  {
+    "id": "repeated_searches",
+    "description": "The caller asks about several services before choosing one that needs no referral: repeated searches and a blocked first choice add context before the booking starts.",
+    "now": "2026-10-19T07:00:00-07:00",
+    "caller": {
+      "is_new_patient": false,
+      "has_referral": false,
+      "opening": "Hi, do you do allergy testing? And what about travel shots?",
+      "details": [
+        "I don't have a referral.",
+        "I've been to your clinics before.",
+        "Then let's just do a flu shot at the Sunset clinic, with whoever is available."
+      ]
+    },
+    "outcome": {"booked": [{"service_id": "appt_011", "location_id": "loc_006"}]},
+    "steps": [
+      {"op": "search_services", "args": {"query": "allergy testing"}, "expect": {"ids": ["appt_081"], "ambiguous": false}},
+      {"op": "search_services", "args": {"query": "travel shots"}, "expect": {"ids": ["appt_010", "appt_013"], "ambiguous": true}},
+      {"op": "update", "args": {"service_id": "appt_081"}, "expect": {"status": "needs_choice", "next": "has_referral"}},
+      {"op": "update", "args": {"patient": {"has_referral": false}}, "expect": {"status": "blocked", "violations": ["REFERRAL_REQUIRED"]}},
+      {"op": "search_services", "args": {"query": "flu shot"}, "expect": {"ids": ["appt_011"]}},
+      {"op": "update", "args": {"service_id": "appt_011", "location_id": "loc_006"}, "expect": {"status": "needs_choice", "next": "is_new_patient", "total_options": 4}},
+      {"op": "update", "args": {"patient": {"is_new_patient": false}}, "expect": {"status": "needs_choice", "next": "provider_id"}},
+      {"op": "update", "args": {"provider_id": "prov_021"}, "expect": {"status": "ready"}},
+      {"op": "offer", "expect": {"count": 3}},
+      {"op": "update", "args": {"slot_id": {"offered": 0}}, "expect": {"status": "ready"}},
+      {"op": "book", "expect": {"booked": true}}
+    ]
+  }
+]

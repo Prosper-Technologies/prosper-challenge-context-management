@@ -55,3 +55,13 @@ Counts: ~8 locations · ~50 providers · ~82 appointment types.
 - **Location-gated services** — only a few locations have `imaging`, so a provider may
   practice at several sites but offer an MRI at only one.
 - **Multi-location providers** — "book with Dr. X" still needs a location to disambiguate.
+
+## Other files here
+
+- `catalog_aliases.json` — curated phrases for matching what callers say: service phrases
+  ("checkup", "teeth cleaning", "knee MRI"), location nicknames ("northgate") and spoken
+  first-name variants ("Dave" → David). Used by `catalog/index.py`; an alias for an
+  unknown ID fails at load.
+- `scenarios.json` — scheduling scenarios for the tricky cases above: the caller's facts,
+  the intended outcome, and a deterministic script of session steps with expected results
+  (`catalog/scenarios.py`, replayed by `tests/test_scenarios.py`).

@@ -1,0 +1,7 @@
+# Test-only dependencies. `make lock` resolves these (with requirements.txt) into
+# requirements-dev.lock, which `make install` installs.
+-r requirements.txt
+pytest>=9.1,<10
+pytest-asyncio>=1.4,<2
+httpx>=0.28,<1
+pytest-timeout>=2.4,<3
